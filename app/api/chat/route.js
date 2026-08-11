@@ -10,9 +10,28 @@ export async function POST(req) {
       },
       body: JSON.stringify(body),
     });
-    const data = await r.json().catch(() => ({}));
+
+    const rawText = await r.text();
+
+    let data;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      // JSON parsing failed — return the raw text so we can SEE what n8n/ngrok actually sent
+      data = {
+        debug_error: "n8n dan kelgan javob JSON emas",
+        debug_status: r.status,
+        debug_url_used: process.env.N8N_CHAT_URL || "N8N_CHAT_URL IS UNDEFINED",
+        debug_raw_response: rawText.slice(0, 1000),
+      };
+    }
+
     return Response.json(data, { status: r.status });
   } catch (e) {
-    return Response.json({ error: "n8n ulanmadi" }, { status: 502 });
+    return Response.json({
+      debug_error: "fetch o'zi ishlamadi",
+      debug_message: String(e.message || e),
+      debug_url_used: process.env.N8N_CHAT_URL || "N8N_CHAT_URL IS UNDEFINED",
+    }, { status: 502 });
   }
 }
