@@ -6,7 +6,10 @@ export async function POST(req) {
     const formData = await req.formData();
     const r = await fetch(process.env.N8N_INGEST_URL, {
       method: "POST",
-      headers: { "x-api-key": process.env.N8N_API_KEY },
+      headers: {
+        "x-api-key": process.env.N8N_API_KEY,
+        "ngrok-skip-browser-warning": "true",
+      },
       body: formData,
     });
     const data = await r.json().catch(() => ({}));
