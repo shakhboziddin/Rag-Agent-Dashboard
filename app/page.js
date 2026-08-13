@@ -48,6 +48,44 @@ const GlobalStyle = () => (
   `}</style>
 );
 
+/* ───────────────────────────── shared upload helper (Cloudflare R2) ──
+   1. Ask our server for a presigned upload URL (R2 credentials never touch the browser)
+   2. Upload the file DIRECTLY to R2 — bypasses Vercel entirely, no size limit
+   3. Tell n8n where to find it (small JSON, no file bytes) */
+async function uploadToKnowledgeBase(file, docType) {
+  const urlRes = await fetch("/api/get-upload-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      file_name: file.name,
+      content_type: file.type || "application/octet-stream",
+      client_id: CLIENT_ID,
+    }),
+  });
+  if (!urlRes.ok) throw new Error(`URL olishda xatolik: ${urlRes.status}`);
+  const { uploadUrl, publicUrl } = await urlRes.json();
+
+  const putRes = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": file.type || "application/octet-stream" },
+    body: file,
+  });
+  if (!putRes.ok) throw new Error(`Yuklashda xatolik: ${putRes.status}`);
+
+  const res = await fetch("/api/upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      client_id: CLIENT_ID,
+      doc_type: docType,
+      file_name: file.name,
+      file_url: publicUrl,
+    }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
 /* ───────────────────────────── data ── */
 const DOC_TYPES = [
   { id: "knowledge", label: "Bilim" },
@@ -569,7 +607,7 @@ function Message({ m, compact }) {
   );
 }
 
-/* ───────────────────────────── uploads ── */
+/* ───────────────────────────── uploads (v2 — Cloudflare R2, no size ceiling) ── */
 function UploadsView({ files, setFiles }) {
   const [docType, setDocType] = useState("knowledge");
   const [drag, setDrag] = useState(false);
@@ -586,13 +624,7 @@ function UploadsView({ files, setFiles }) {
       setFiles((prev) => [entry, ...prev]);
 
       try {
-        if (f.size > 4 * 1024 * 1024) throw new Error("4MB dan katta fayl (v1 limit)");
-        const fd = new FormData();
-        fd.append("client_id", CLIENT_ID);
-        fd.append("doc_type", docType);
-        fd.append("file", f, f.name);
-        const res = await fetch("/api/upload", { method: "POST", body: fd });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        await uploadToKnowledgeBase(f, docType);
         setFiles((prev) => prev.map((x) => (x.id === id ? { ...x, status: "ready" } : x)));
       } catch (err) {
         setFiles((prev) => prev.map((x) => (x.id === id ? { ...x, status: "error", errMsg: String(err.message || err) } : x)));
@@ -634,7 +666,7 @@ function UploadsView({ files, setFiles }) {
           <FileText size={20} color={T.muted} />
         </div>
         <div style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}>Fayllarni shu yerga tashlang</div>
-        <div style={{ fontSize: 13, color: T.muted, fontWeight: 600 }}>PDF, TXT, MP3, M4A, OGG · ovozli xabarlar ham · 4MB gacha (v1)</div>
+        <div style={{ fontSize: 13, color: T.muted, fontWeight: 600 }}>PDF, TXT, MP3, M4A, OGG, MP4 · katta fayllar (100MB+) ham qo'llab-quvvatlanadi</div>
       </div>
 
       <div style={{ fontSize: 11, fontWeight: 800, color: T.text2, marginBottom: 8, textTransform: "uppercase", letterSpacing: "0.07em" }}>Oxirgi yuklanganlar</div>
@@ -707,16 +739,12 @@ function GoalView() {
 
   const save = async () => {
     setSaved(true);
-    // Send the goal as a text document into the knowledge base
     const goalText = `ZAPUSK MAQSADI\nSotuv maqsadi: ${form.sales} dona\nO'rtacha chek: ${form.check} so'm\nReklama budjeti: ${form.budget} so'm\nBoshlanish: ${form.start}\nTugash: ${form.end}\nVoronka turi: ${form.funnel}`;
     try {
       const blob = new Blob([goalText], { type: "text/plain" });
-      const fd = new FormData();
-      fd.append("client_id", CLIENT_ID);
-      fd.append("doc_type", "goal");
-      fd.append("file", blob, "launch_goal.txt");
-      await fetch("/api/upload", { method: "POST", body: fd });
-    } catch (e) { /* stays saved locally; upload retries on next save */ }
+      const file = new File([blob], "launch_goal.txt", { type: "text/plain" });
+      await uploadToKnowledgeBase(file, "goal");
+    } catch (e) { /* stays saved locally; retry on next save */ }
   };
 
   return (

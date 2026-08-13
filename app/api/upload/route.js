@@ -3,14 +3,15 @@ export const maxDuration = 60;
 
 export async function POST(req) {
   try {
-    const formData = await req.formData();
+    const body = await req.json();
     const r = await fetch(process.env.N8N_INGEST_URL, {
       method: "POST",
       headers: {
+        "Content-Type": "application/json",
         "x-api-key": process.env.N8N_API_KEY,
         "ngrok-skip-browser-warning": "true",
       },
-      body: formData,
+      body: JSON.stringify(body),
     });
     const data = await r.json().catch(() => ({}));
     return Response.json(data, { status: r.status });
