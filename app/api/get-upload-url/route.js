@@ -21,7 +21,8 @@ export async function POST(req) {
       ContentType: content_type || "application/octet-stream",
     });
 
-    const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
+    // 6 hours — long enough for very large files on slow upload connections
+    const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 21600 });
     const publicUrl = `${process.env.R2_PUBLIC_URL}/${key}`;
 
     return Response.json({ uploadUrl, publicUrl });

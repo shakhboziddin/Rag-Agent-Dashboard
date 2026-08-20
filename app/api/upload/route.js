@@ -23,7 +23,7 @@ export async function POST(req) {
 
     const rawText = await r.text();
     let data;
-    try {
+    try { 
       data = JSON.parse(rawText);
     } catch {
       data = {
