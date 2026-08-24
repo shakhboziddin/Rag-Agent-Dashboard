@@ -1,5 +1,8 @@
 "use client";
 
+// This page is fully client-side — never prerender it at build time.
+export const dynamic = "force-dynamic";
+
 import { useState, useRef, useEffect } from "react";
 import {
   LayoutGrid, FolderPlus, Brain, Upload, FileText,
