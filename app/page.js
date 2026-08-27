@@ -1374,13 +1374,25 @@ function QuickStat({ label, value }) {
   );
 }
 
-/* ─── FULL DETAIL PAGE — everything from the interview ───── */
+/* ─── FULL DETAIL PAGE — editable + Notion export ───────── */
 function InterviewDetail({ p, project, onBack }) {
-  const profile = normaliseProfile(p.profile);
+  const [profile, setProfile] = useState(() => normaliseProfile(p.profile));
+  const [summary, setSummary] = useState(p.summary || "");
   const [tab, setTab] = useState("profile");
   const [transcript, setTranscript] = useState(null);
   const [loadingT, setLoadingT] = useState(false);
   const [copied, setCopied] = useState(false);
+
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [notion, setNotion] = useState({
+    page_id: p.notion_page_id || null,
+    url: p.notion_url || null,
+    synced_at: p.notion_synced_at || null,
+    updated_at: p.updated_at || p.created_at,
+  });
+  const [exporting, setExporting] = useState(false);
+  const [notionMsg, setNotionMsg] = useState("");
 
   const hasValue = (v) =>
     Array.isArray(v) ? v.length > 0
@@ -1388,6 +1400,64 @@ function InterviewDetail({ p, project, onBack }) {
     : (v !== null && v !== undefined && String(v).trim() !== "");
 
   const getVal = (g, key) => (g.nested ? (profile[g.nested] || {})[key] : profile[key]);
+
+  const setVal = (g, key, value) => {
+    setProfile((prev) => {
+      if (g.nested) {
+        return { ...prev, [g.nested]: { ...(prev[g.nested] || {}), [key]: value } };
+      }
+      return { ...prev, [key]: value };
+    });
+    setDirty(true);
+  };
+
+  /* has it been edited since the last Notion sync? */
+  const needsSync = (() => {
+    if (!notion.page_id) return false;
+    if (dirty) return true;
+    if (!notion.synced_at) return true;
+    return new Date(notion.updated_at) > new Date(notion.synced_at);
+  })();
+
+  const save = async () => {
+    setSaving(true);
+    const { error } = await supabase
+      .from("interview_profiles")
+      .update({ profile, summary })
+      .eq("id", p.id);
+    setSaving(false);
+    if (!error) {
+      setDirty(false);
+      setNotion((n) => ({ ...n, updated_at: new Date().toISOString() }));
+    }
+  };
+
+  const exportNotion = async () => {
+    if (dirty) await save();
+    setExporting(true);
+    setNotionMsg("");
+    try {
+      const res = await fetch("/api/notion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile_id: p.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      setNotion({
+        page_id: data.notion_page_id,
+        url: data.notion_url,
+        synced_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+      setNotionMsg("Notion yangilandi");
+      setTimeout(() => setNotionMsg(""), 3000);
+    } catch (e) {
+      setNotionMsg("Xatolik: " + String(e.message || e));
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const loadTranscript = async () => {
     if (transcript !== null) return;
@@ -1406,7 +1476,7 @@ function InterviewDetail({ p, project, onBack }) {
 
   const copyAll = () => {
     const lines = [`# ${profile.ism || "Intervyu"} — ${project.name}`, ""];
-    if (p.summary) { lines.push("## XULOSA", p.summary, ""); }
+    if (summary) { lines.push("## XULOSA", summary, ""); }
     FIELD_GROUPS.forEach((g) => {
       const rows = g.fields.filter(([k]) => hasValue(getVal(g, k)));
       if (!rows.length) return;
@@ -1430,6 +1500,22 @@ function InterviewDetail({ p, project, onBack }) {
     { id: "transcript", label: "To'liq matn" },
     { id: "raw", label: "Xom JSON" },
   ];
+
+  /* Notion button state */
+  let notionLabel, notionColor, notionIcon;
+  if (!notion.page_id) {
+    notionLabel = "Notion'ga eksport qilish";
+    notionColor = T.primary;
+    notionIcon = <Upload size={14} />;
+  } else if (needsSync) {
+    notionLabel = "O'zgarishlarni saqlash";
+    notionColor = T.warning;
+    notionIcon = <RefreshCw size={14} />;
+  } else {
+    notionLabel = "Notion'da ochish";
+    notionColor = T.success;
+    notionIcon = <Check size={14} />;
+  }
 
   return (
     <div className="fade-up">
@@ -1462,34 +1548,91 @@ function InterviewDetail({ p, project, onBack }) {
                 fontSize: 11, fontWeight: 800, color: T.secondaryLight,
                 backgroundColor: "rgba(140,115,246,.12)", borderRadius: 999, padding: "4px 12px",
               }}>{p.profile_type === "customer" ? "Mijoz ovozi" : "Ekspert ovozi"}</span>
-              <span style={{
-                fontSize: 11, fontWeight: 700, color: T.muted,
-                backgroundColor: T.s1, borderRadius: 999, padding: "4px 12px",
-              }}>{p.file_id}</span>
+              {dirty && (
+                <span className="fade-up" style={{
+                  fontSize: 11, fontWeight: 800, color: T.warning,
+                  backgroundColor: "rgba(243,198,75,.12)", borderRadius: 999, padding: "4px 12px",
+                  display: "flex", alignItems: "center", gap: 5,
+                }}><AlertCircle size={11} /> Saqlanmagan o&apos;zgarishlar</span>
+              )}
             </div>
           </div>
 
-          <button className="btn" onClick={copyAll} style={{
-            display: "flex", alignItems: "center", gap: 7, padding: "10px 18px",
-            borderRadius: 12, backgroundColor: T.primary, color: "#090909",
-            fontSize: 13, fontWeight: 800,
-          }}>
-            {copied ? <><Check size={14} /> Nusxalandi</> : <><Copy size={14} /> Hammasini nusxalash</>}
-          </button>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {dirty && (
+              <button className="btn" onClick={save} disabled={saving} style={{
+                display: "flex", alignItems: "center", gap: 7, padding: "10px 18px",
+                borderRadius: 12, backgroundColor: T.panel, color: T.text,
+                fontSize: 13, fontWeight: 800,
+              }}>
+                {saving ? <RefreshCw size={14} className="spin" /> : <Check size={14} />}
+                Saqlash
+              </button>
+            )}
+            <button className="btn" onClick={copyAll} style={{
+              display: "flex", alignItems: "center", gap: 7, padding: "10px 16px",
+              borderRadius: 12, backgroundColor: "transparent",
+              border: `1px solid ${T.border}`, color: copied ? T.success : T.text2,
+              fontSize: 13, fontWeight: 700,
+            }}>
+              {copied ? <Check size={14} /> : <Copy size={14} />}
+            </button>
+          </div>
         </div>
 
-        {p.summary && (
-          <div style={{
-            marginTop: 18, backgroundColor: "rgba(217,255,99,.06)",
-            border: "1px solid rgba(217,255,99,.2)", borderRadius: 12, padding: 16,
+        {/* Notion bar */}
+        <div style={{
+          marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.border}`,
+          display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap",
+        }}>
+          <button className="btn" onClick={
+            (!notion.page_id || needsSync) ? exportNotion : () => window.open(notion.url, "_blank")
+          } disabled={exporting} style={{
+            display: "flex", alignItems: "center", gap: 8, padding: "11px 20px",
+            borderRadius: 12, backgroundColor: notionColor, color: "#090909",
+            fontSize: 13, fontWeight: 800,
+            boxShadow: notionColor === T.primary ? `0 0 24px ${T.primaryGlow}` : "none",
           }}>
-            <div style={{
-              fontSize: 11, fontWeight: 800, color: T.primary, marginBottom: 6,
-              textTransform: "uppercase", letterSpacing: "0.07em",
-            }}>Prodyuser uchun xulosa</div>
-            <div style={{ fontSize: 14.5, lineHeight: "23px" }}>{p.summary}</div>
-          </div>
-        )}
+            {exporting ? <RefreshCw size={14} className="spin" /> : notionIcon}
+            {exporting ? "Yuborilmoqda…" : notionLabel}
+          </button>
+
+          {notion.url && !needsSync && (
+            <a href={notion.url} target="_blank" rel="noreferrer" style={{
+              fontSize: 12, color: T.text2, fontWeight: 700, textDecoration: "none",
+            }}>Notion sahifasi →</a>
+          )}
+
+          {needsSync && (
+            <span style={{ fontSize: 12, color: T.warning, fontWeight: 700 }}>
+              Notion eskirgan — o&apos;zgarishlar yuborilmagan
+            </span>
+          )}
+
+          {notionMsg && (
+            <span className="fade-up" style={{
+              fontSize: 12, fontWeight: 700,
+              color: notionMsg.startsWith("Xatolik") ? T.danger : T.success,
+            }}>{notionMsg}</span>
+          )}
+        </div>
+
+        {/* editable summary */}
+        <div style={{
+          marginTop: 16, backgroundColor: "rgba(217,255,99,.06)",
+          border: "1px solid rgba(217,255,99,.2)", borderRadius: 12, padding: 16,
+        }}>
+          <div style={{
+            fontSize: 11, fontWeight: 800, color: T.primary, marginBottom: 8,
+            textTransform: "uppercase", letterSpacing: "0.07em",
+          }}>Prodyuser uchun xulosa</div>
+          <AutoTextarea
+            value={summary}
+            onChange={(v) => { setSummary(v); setDirty(true); }}
+            placeholder="Xulosa yozing…"
+            style={{ fontSize: 14.5, lineHeight: "23px" }}
+          />
+        </div>
       </div>
 
       {/* tabs */}
@@ -1509,8 +1652,6 @@ function InterviewDetail({ p, project, onBack }) {
       {tab === "profile" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {FIELD_GROUPS.map((g) => {
-            const rows = g.fields.filter(([k]) => hasValue(getVal(g, k)));
-            if (rows.length === 0) return null;
             const Icon = g.icon;
             const isNumbers = g.nested === "biznes_raqamlari";
             const isGoals = g.nested === "maqsad_va_missiya";
@@ -1529,14 +1670,15 @@ function InterviewDetail({ p, project, onBack }) {
                     fontSize: 12, fontWeight: 800, color: accent,
                     textTransform: "uppercase", letterSpacing: "0.07em",
                   }}>{g.title}</span>
-                  <div style={{ flex: 1 }} />
-                  <span style={{ fontSize: 11, color: T.muted, fontWeight: 700 }}>
-                    {rows.length}
-                  </span>
                 </div>
-                <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-                  {rows.map(([key, label]) => (
-                    <FieldRow key={key} label={label} value={getVal(g, key)} />
+                <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                  {g.fields.map(([key, label]) => (
+                    <EditableField
+                      key={key}
+                      label={label}
+                      value={getVal(g, key)}
+                      onChange={(v) => setVal(g, key, v)}
+                    />
                   ))}
                 </div>
               </div>
@@ -1583,6 +1725,111 @@ function InterviewDetail({ p, project, onBack }) {
             fontSize: 11.5, lineHeight: "18px", color: T.text2,
             whiteSpace: "pre-wrap", overflow: "auto", maxHeight: "60vh", margin: 0,
           }}>{JSON.stringify(profile, null, 2)}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/* textarea that grows with its content */
+function AutoTextarea({ value, onChange, placeholder, style }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (ref.current) {
+      ref.current.style.height = "auto";
+      ref.current.style.height = ref.current.scrollHeight + "px";
+    }
+  }, [value]);
+  return (
+    <textarea
+      ref={ref}
+      value={value || ""}
+      placeholder={placeholder}
+      onChange={(e) => onChange(e.target.value)}
+      style={{
+        width: "100%", resize: "none", backgroundColor: "transparent",
+        border: "1px solid transparent", borderRadius: 8, color: T.text,
+        fontFamily: FONT, padding: "6px 8px", overflow: "hidden",
+        transition: "background-color 120ms ease-out, border-color 120ms ease-out",
+        ...style,
+      }}
+      onFocus={(e) => {
+        e.target.style.backgroundColor = T.s1;
+        e.target.style.borderColor = T.border;
+      }}
+      onBlur={(e) => {
+        e.target.style.backgroundColor = "transparent";
+        e.target.style.borderColor = "transparent";
+      }}
+    />
+  );
+}
+
+/* one editable field — text or list */
+function EditableField({ label, value, onChange }) {
+  const isList = Array.isArray(value);
+  const [asList, setAsList] = useState(isList);
+
+  const items = isList ? value : [];
+
+  const updateItem = (i, v) => {
+    const next = [...items];
+    next[i] = v;
+    onChange(next);
+  };
+  const removeItem = (i) => onChange(items.filter((_, idx) => idx !== i));
+  const addItem = () => onChange([...(items || []), ""]);
+
+  return (
+    <div style={{ display: "grid", gridTemplateColumns: "minmax(120px, 180px) 1fr", gap: 16, alignItems: "start" }}>
+      <div style={{ fontSize: 12, fontWeight: 700, color: T.muted, paddingTop: 8 }}>{label}</div>
+
+      {asList ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {items.map((item, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
+              <span style={{
+                width: 5, height: 5, borderRadius: 999, backgroundColor: T.primary,
+                flexShrink: 0, marginTop: 15,
+              }} />
+              <div style={{ flex: 1 }}>
+                <AutoTextarea
+                  value={item}
+                  onChange={(v) => updateItem(i, v)}
+                  style={{ fontSize: 13.5, lineHeight: "21px" }}
+                />
+              </div>
+              <button className="btn" onClick={() => removeItem(i)} title="O'chirish" style={{
+                backgroundColor: "transparent", color: T.muted, padding: "6px 4px",
+                fontSize: 15, lineHeight: 1,
+              }}>×</button>
+            </div>
+          ))}
+          <button className="btn" onClick={addItem} style={{
+            alignSelf: "flex-start", display: "flex", alignItems: "center", gap: 5,
+            backgroundColor: "transparent", color: T.text2, fontSize: 12,
+            fontWeight: 700, padding: "4px 8px", border: `1px dashed ${T.border}`,
+            borderRadius: 8,
+          }}>
+            <Plus size={11} /> Qo&apos;shish
+          </button>
+        </div>
+      ) : (
+        <div>
+          <AutoTextarea
+            value={value}
+            onChange={onChange}
+            placeholder="—"
+            style={{ fontSize: 13.5, lineHeight: "21px" }}
+          />
+          {!value && (
+            <button className="btn" onClick={() => { setAsList(true); onChange([""]); }} style={{
+              display: "flex", alignItems: "center", gap: 5, backgroundColor: "transparent",
+              color: T.muted, fontSize: 11, fontWeight: 700, padding: "2px 8px",
+            }}>
+              <Plus size={10} /> Ro&apos;yxat sifatida
+            </button>
+          )}
         </div>
       )}
     </div>
