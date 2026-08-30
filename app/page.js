@@ -11,6 +11,7 @@ import {
   Search, Bell, ChevronDown, AlertCircle, Copy,
   Sparkles, ArrowLeft, Plus, MessageSquare, Target,
   Zap,
+  Trash2, Database, ShieldCheck,
   Send as SendIcon
 } from "lucide-react";
 import { supabase } from "../lib/supabase";
@@ -31,6 +32,12 @@ const EASE = "cubic-bezier(.22,.61,.36,1)";
 
 const BRAIN_ID = "brain";
 const TELEGRAM_BOT = "ProdSync_bot";  // without the @
+
+/* Admin panel password.
+   NOTE: this is checked in the browser, so anyone who opens DevTools can read it.
+   It hides the page from casual use — it is NOT real security.
+   Replace with a proper role check before giving access to a wider team. */
+const ADMIN_PASSWORD = "1234";
 
 /* ═══════════════════════════════════════════════════════════
    UI LABELS (Uzbek) — swap this object to add RU/EN later
@@ -55,24 +62,107 @@ const GlobalStyle = () => (
     ::-webkit-scrollbar { width: 8px; height: 8px; }
     ::-webkit-scrollbar-thumb { background: ${T.panel}; border-radius: 999px; }
     ::-webkit-scrollbar-track { background: transparent; }
+
     @keyframes fadeUp { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
     @keyframes spin { to { transform: rotate(360deg); } }
     @keyframes slide { 0% { left: -35%; } 100% { left: 100%; } }
-    .indeterminate { animation: slide 1.4s ease-in-out infinite; }
     .fade-up { animation: fadeUp 180ms ${EASE}; }
     .spin { animation: spin 900ms linear infinite; }
-    .hv { transition: background 120ms ease-out, border-color 120ms ease-out; cursor: pointer; }
-    .hv:hover { background: ${T.s2}; }
-    .btn { transition: background 120ms ease-out, transform 120ms ease-out, box-shadow 180ms ease-out, border-color 120ms ease-out; cursor: pointer; border: none; font-family: ${FONT}; }
-    .btn:active { transform: scale(0.98); }
-    .btn:disabled { opacity: .5; cursor: not-allowed; }
-    .card { background: ${T.canvas}; border: 1px solid ${T.border}; border-radius: 16px; }
+    .indeterminate { animation: slide 1.4s ease-in-out infinite; }
+
+    /* ── Interactive surfaces ───────────────────────────────
+       Hover only lights the element itself, never blank space.
+       A soft radial follows the cursor (Windows 11 / Fluent style). */
+    .hv, .btn, .card-int {
+      position: relative;
+      isolation: isolate;
+      transition: background-color 140ms ease-out, border-color 140ms ease-out,
+                  color 140ms ease-out, transform 140ms ease-out;
+    }
+    .hv::before, .btn::before, .card-int::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      border-radius: inherit;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 180ms ease-out;
+      background: radial-gradient(
+        200px circle at var(--mx, 50%) var(--my, 50%),
+        rgba(255,255,255,0.07),
+        rgba(255,255,255,0.02) 40%,
+        transparent 65%
+      );
+      z-index: 0;
+    }
+    .hv:hover::before, .btn:hover::before, .card-int:hover::before { opacity: 1; }
+    .btn:disabled::before { opacity: 0 !important; }
+
+    .hv { cursor: pointer; }
+    .hv:hover { background-color: rgba(255,255,255,0.035); }
+
+    .btn {
+      cursor: pointer;
+      border: none;
+      font-family: ${FONT};
+    }
+    .btn:active { transform: scale(0.985); }
+    .btn:disabled { opacity: .5; cursor: not-allowed; transform: none; }
+
+    .card {
+      background-color: ${T.canvas};
+      border: 1px solid ${T.border};
+      border-radius: 16px;
+    }
+    .card-int:hover { border-color: rgba(255,255,255,0.14); }
+
     .link { color: ${T.primary}; cursor: pointer; font-weight: 700; }
-    input, textarea, select { outline: none; font-family: ${FONT}; }
-    input:focus, textarea:focus, select:focus { border-color: ${T.primary} !important; box-shadow: 0 0 0 3px ${T.primaryGlow}; }
-    @media (prefers-reduced-motion: reduce) { .fade-up, .spin { animation: none; } }
+    .link:hover { color: ${T.primaryHover}; }
+
+    /* ── Inputs: subtle, no heavy ring ───────────────────── */
+    input, textarea, select {
+      outline: none;
+      font-family: ${FONT};
+      transition: background-color 140ms ease-out, border-color 140ms ease-out;
+    }
+    input:hover, textarea:hover, select:hover {
+      border-color: rgba(255,255,255,0.14);
+    }
+    input:focus, textarea:focus, select:focus {
+      border-color: rgba(217,255,99,0.35) !important;
+      background-color: rgba(255,255,255,0.03);
+      box-shadow: none !important;
+    }
+
+    /* inline editable fields — invisible until touched */
+    .soft-input:hover { background-color: rgba(255,255,255,0.025); }
+    .soft-input:focus {
+      background-color: rgba(255,255,255,0.04);
+      border-color: rgba(217,255,99,0.28) !important;
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .fade-up, .spin, .indeterminate { animation: none; }
+      .hv::before, .btn::before, .card-int::before { display: none; }
+    }
   `}</style>
 );
+
+/* Tracks the cursor so the hover glow follows it (Fluent-style).
+   Attached once at the root; costs nothing when nothing is hovered. */
+function usePointerGlow() {
+  useEffect(() => {
+    const onMove = (e) => {
+      const el = e.target.closest?.(".hv, .btn, .card-int");
+      if (!el) return;
+      const r = el.getBoundingClientRect();
+      el.style.setProperty("--mx", `${e.clientX - r.left}px`);
+      el.style.setProperty("--my", `${e.clientY - r.top}px`);
+    };
+    document.addEventListener("pointermove", onMove, { passive: true });
+    return () => document.removeEventListener("pointermove", onMove);
+  }, []);
+}
 
 /* ═══════════════════════════════════════════════════════════
    SHARED HELPERS
@@ -172,6 +262,7 @@ function watchStatus(fileId, onStage) {
    ROOT
    ═══════════════════════════════════════════════════════════ */
 export default function App() {
+  usePointerGlow();
   const [user, setUser] = useState(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [view, setView] = useState("projects");
@@ -181,6 +272,9 @@ export default function App() {
   // Uploads also live here — they keep running when you change page
   const [uploads, setUploads] = useState([]);
   const fileStore = useRef({});
+  const [adminUnlocked, setAdminUnlocked] = useState(false);
+  const [pwPrompt, setPwPrompt] = useState(false);
+  const [railOpen, setRailOpen] = useState(true);
 
   const patchUpload = (id, patch) =>
     setUploads((prev) => prev.map((u) => (u.id === id ? { ...u, ...patch } : u)));
@@ -288,6 +382,7 @@ export default function App() {
     brain: L.nav.brain,
     chat: L.nav.chat,
     profile: L.nav.profile,
+    admin: "Admin panel",
   };
 
   return (
@@ -301,6 +396,9 @@ export default function App() {
         view={view}
         setView={(v) => { setView(v); setOpenProject(null); }}
         onLogout={logout}
+        adminUnlocked={adminUnlocked}
+        open={railOpen}
+        setOpen={setRailOpen}
       />
       <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", height: "100vh" }}>
         <TopBar
@@ -308,6 +406,9 @@ export default function App() {
           user={user}
           uploads={uploads}
           onClearFinished={clearFinished}
+          adminUnlocked={adminUnlocked}
+          onAdminRequest={() => setPwPrompt(true)}
+          onLogout={logout}
         />
         <div style={{ flex: 1, overflowY: "auto", position: "relative" }}>
           <div style={{
@@ -341,11 +442,23 @@ export default function App() {
                   />
                 )}
                 {view === "profile" && <ProfileView user={user} />}
+                {view === "admin" && adminUnlocked && <AdminContent />}
               </>
             )}
           </div>
         </div>
       </div>
+      {pwPrompt && (
+        <AdminGate
+          onClose={() => setPwPrompt(false)}
+          onSuccess={() => {
+            setAdminUnlocked(true);
+            setPwPrompt(false);
+            setView("admin");
+            setOpenProject(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -353,53 +466,145 @@ export default function App() {
 /* ═══════════════════════════════════════════════════════════
    RAIL + TOPBAR
    ═══════════════════════════════════════════════════════════ */
-function Rail({ view, setView, onLogout }) {
+function Rail({ view, setView, onLogout, adminUnlocked, open, setOpen }) {
   const nav = [
     { id: "projects", icon: LayoutGrid, label: L.nav.projects },
     { id: "brain", icon: Brain, label: L.nav.brain },
     { id: "chat", icon: MessageSquare, label: L.nav.chat },
     { id: "profile", icon: Zap, label: L.nav.profile },
   ];
+  if (adminUnlocked) {
+    nav.push({ id: "admin", icon: ShieldCheck, label: "Admin panel", danger: true });
+  }
+
+  const W = open ? 216 : 68;
+
   return (
     <aside style={{
-      width: 68, flexShrink: 0, borderRight: `1px solid ${T.border}`, background: T.bg,
-      display: "flex", flexDirection: "column", alignItems: "center",
-      padding: "16px 0", gap: 6, height: "100vh", position: "sticky", top: 0,
+      width: W, flexShrink: 0, borderRight: `1px solid ${T.border}`,
+      backgroundColor: T.bg, display: "flex", flexDirection: "column",
+      padding: open ? "16px 12px" : "16px 0", gap: 4,
+      height: "100vh", position: "sticky", top: 0,
+      alignItems: open ? "stretch" : "center",
+      transition: "width 200ms cubic-bezier(.22,.61,.36,1), padding 200ms ease-out",
+      overflow: "hidden",
     }}>
+      {/* logo row */}
       <div style={{
-        width: 38, height: 38, borderRadius: 11, background: T.primary, marginBottom: 18,
-        display: "flex", alignItems: "center", justifyContent: "center",
-        color: "#090909", fontWeight: 800, fontSize: 13, boxShadow: `0 0 28px ${T.primaryGlow}`,
-      }}>KZ</div>
-      {nav.map(({ id, icon: Icon, label }) => {
+        display: "flex", alignItems: "center", gap: 10, marginBottom: 16,
+        paddingLeft: open ? 2 : 0, justifyContent: open ? "flex-start" : "center",
+      }}>
+        <div style={{
+          width: 38, height: 38, borderRadius: 11, backgroundColor: T.primary, flexShrink: 0,
+          display: "flex", alignItems: "center", justifyContent: "center",
+          color: "#090909", fontWeight: 800, fontSize: 13,
+          boxShadow: `0 0 28px ${T.primaryGlow}`,
+        }}>KZ</div>
+        {open && (
+          <div style={{ minWidth: 0, overflow: "hidden" }}>
+            <div style={{ fontSize: 13, fontWeight: 800, whiteSpace: "nowrap" }}>Kontent Zavod</div>
+            <div style={{
+              fontSize: 10, fontWeight: 700, color: T.muted, whiteSpace: "nowrap",
+              textTransform: "uppercase", letterSpacing: "0.06em",
+            }}>Prodyuser</div>
+          </div>
+        )}
+      </div>
+
+      {nav.map(({ id, icon: Icon, label, danger }) => {
         const active = view === id;
+        const color = active ? (danger ? T.danger : T.primary) : T.muted;
         return (
-          <div key={id} className="hv" onClick={() => setView(id)} title={label} style={{
-            width: 42, height: 42, borderRadius: 12, display: "flex",
-            alignItems: "center", justifyContent: "center",
-            background: active ? T.s2 : "transparent", position: "relative",
-          }}>
-            {active && <span style={{
-              position: "absolute", left: -13, top: 11, bottom: 11, width: 3,
-              borderRadius: 999, background: T.primary,
-            }} />}
-            <Icon size={18} strokeWidth={2} color={active ? T.primary : T.muted} />
+          <div key={id} onClick={() => setView(id)} title={open ? "" : label}
+            style={{
+              height: 42, display: "flex", alignItems: "center",
+              justifyContent: open ? "flex-start" : "center",
+              position: "relative", cursor: "pointer",
+            }}>
+            {/* the hover/active surface — square when collapsed, full row when open */}
+            <div className="hv" style={{
+              position: "absolute",
+              left: open ? 0 : "50%",
+              transform: open ? "none" : "translateX(-50%)",
+              width: open ? "100%" : 42,
+              height: 42, borderRadius: 12,
+              backgroundColor: active ? T.s2 : "transparent",
+              transition: "width 200ms cubic-bezier(.22,.61,.36,1), background-color 140ms ease-out",
+              zIndex: 0,
+            }} />
+            {active && (
+              <span style={{
+                position: "absolute",
+                left: open ? -12 : -13,
+                top: 11, bottom: 11, width: 3, borderRadius: 999,
+                backgroundColor: danger ? T.danger : T.primary, zIndex: 2,
+              }} />
+            )}
+            <div style={{
+              position: "relative", zIndex: 1, display: "flex", alignItems: "center",
+              gap: 11, paddingLeft: open ? 12 : 0, pointerEvents: "none",
+            }}>
+              <Icon size={18} strokeWidth={2} color={color} style={{ flexShrink: 0 }} />
+              {open && (
+                <span style={{
+                  fontSize: 13.5, fontWeight: active ? 800 : 600,
+                  color: active ? T.text : T.text2, whiteSpace: "nowrap",
+                }}>{label}</span>
+              )}
+            </div>
           </div>
         );
       })}
+
       <div style={{ flex: 1 }} />
-      <div className="hv" onClick={onLogout} title="Chiqish" style={{
-        width: 42, height: 42, borderRadius: 12,
-        display: "flex", alignItems: "center", justifyContent: "center",
-      }}>
-        <LogOut size={17} color={T.muted} />
-      </div>
+
+      {/* collapse toggle */}
+      <RailRow open={open} icon={ChevronDown} label="Yig&apos;ish"
+        onClick={() => setOpen(!open)}
+        iconStyle={{
+          transform: open ? "rotate(90deg)" : "rotate(-90deg)",
+          transition: "transform 200ms ease-out",
+        }} />
+
+      <RailRow open={open} icon={LogOut} label="Chiqish" onClick={onLogout} />
     </aside>
   );
 }
 
-function TopBar({ title, user, uploads = [], onClearFinished }) {
+function RailRow({ open, icon: Icon, label, onClick, iconStyle }) {
+  return (
+    <div onClick={onClick} title={open ? "" : label} style={{
+      height: 40, display: "flex", alignItems: "center",
+      justifyContent: open ? "flex-start" : "center",
+      position: "relative", cursor: "pointer",
+    }}>
+      <div className="hv" style={{
+        position: "absolute",
+        left: open ? 0 : "50%",
+        transform: open ? "none" : "translateX(-50%)",
+        width: open ? "100%" : 42, height: 40, borderRadius: 12,
+        transition: "width 200ms cubic-bezier(.22,.61,.36,1)",
+        zIndex: 0,
+      }} />
+      <div style={{
+        position: "relative", zIndex: 1, display: "flex", alignItems: "center",
+        gap: 11, paddingLeft: open ? 12 : 0, pointerEvents: "none",
+      }}>
+        <Icon size={17} color={T.muted} style={{ flexShrink: 0, ...iconStyle }} />
+        {open && (
+          <span style={{ fontSize: 13, fontWeight: 600, color: T.text2, whiteSpace: "nowrap" }}>
+            {label}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TopBar({ title, user, uploads = [], onClearFinished, adminUnlocked, onAdminRequest, onLogout }) {
   const [open, setOpen] = useState(false);
+  const [menu, setMenu] = useState(false);
+
   const active = uploads.filter((u) =>
     ["uploading", "processing", "transcribing", "analyzing"].includes(u.stage)
   );
@@ -410,7 +615,7 @@ function TopBar({ title, user, uploads = [], onClearFinished }) {
     <div style={{
       height: 64, flexShrink: 0, borderBottom: `1px solid ${T.border}`,
       display: "flex", alignItems: "center", padding: "0 28px", gap: 12,
-      backgroundColor: T.bg, position: "relative",
+      backgroundColor: T.bg, position: "relative", zIndex: 30,
     }}>
       <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: "-0.01em" }}>{title}</div>
       <div style={{ flex: 1 }} />
@@ -419,7 +624,8 @@ function TopBar({ title, user, uploads = [], onClearFinished }) {
         <div style={{ position: "relative" }}>
           <button className="btn" onClick={() => setOpen((o) => !o)} style={{
             display: "flex", alignItems: "center", gap: 8, padding: "7px 14px",
-            borderRadius: 999, backgroundColor: active.length ? "rgba(98,214,255,.1)"
+            borderRadius: 999,
+            backgroundColor: active.length ? "rgba(98,214,255,.1)"
               : failed.length ? "rgba(233,104,104,.1)" : "rgba(143,232,106,.1)",
             border: `1px solid ${active.length ? "rgba(98,214,255,.3)"
               : failed.length ? "rgba(233,104,104,.3)" : "rgba(143,232,106,.3)"}`,
@@ -437,9 +643,7 @@ function TopBar({ title, user, uploads = [], onClearFinished }) {
 
           {open && (
             <>
-              <div onClick={() => setOpen(false)} style={{
-                position: "fixed", inset: 0, zIndex: 40,
-              }} />
+              <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 40 }} />
               <div className="fade-up" style={{
                 position: "absolute", top: 44, right: 0, width: 340, zIndex: 50,
                 backgroundColor: T.canvas, border: `1px solid ${T.border}`,
@@ -461,7 +665,6 @@ function TopBar({ title, user, uploads = [], onClearFinished }) {
                     }}>Tugaganlarni yashirish</button>
                   )}
                 </div>
-
                 <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                   {uploads.map((u) => (
                     <div key={u.id} style={{
@@ -493,24 +696,80 @@ function TopBar({ title, user, uploads = [], onClearFinished }) {
         </div>
       )}
 
-      <div className="hv" style={{
-        width: 36, height: 36, borderRadius: 999, border: `1px solid ${T.border}`,
-        display: "flex", alignItems: "center", justifyContent: "center",
-      }}>
-        <Search size={15} color={T.text2} />
-      </div>
       <div style={{ width: 1, height: 24, backgroundColor: T.border, margin: "0 4px" }} />
-      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <div style={{
-          width: 34, height: 34, borderRadius: 999, backgroundColor: T.secondaryDark,
-          display: "flex", alignItems: "center", justifyContent: "center",
-          fontSize: 12, fontWeight: 800,
-        }}>{initialsOf(user.name)}</div>
-        <div style={{ lineHeight: 1.1 }}>
-          <div style={{ fontSize: 13, fontWeight: 700 }}>{user.name}</div>
-          <div style={{ fontSize: 11, color: T.muted, fontWeight: 600 }}>Prodyuser</div>
+
+      {/* profile dropdown */}
+      <div style={{ position: "relative" }}>
+        <div className="hv" onClick={() => setMenu((m) => !m)} style={{
+          display: "flex", alignItems: "center", gap: 10, padding: "5px 8px 5px 5px",
+          borderRadius: 999, cursor: "pointer",
+        }}>
+          <div style={{
+            width: 34, height: 34, borderRadius: 999, backgroundColor: T.secondaryDark,
+            display: "flex", alignItems: "center", justifyContent: "center",
+            fontSize: 12, fontWeight: 800, flexShrink: 0,
+          }}>{initialsOf(user.name)}</div>
+          <div style={{ lineHeight: 1.1 }}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>{user.name}</div>
+            <div style={{ fontSize: 11, color: T.muted, fontWeight: 600 }}>
+              {adminUnlocked ? "Admin" : "Prodyuser"}
+            </div>
+          </div>
+          <ChevronDown size={14} color={T.muted} style={{
+            transform: menu ? "rotate(180deg)" : "none",
+            transition: "transform 160ms ease-out",
+          }} />
         </div>
-        <ChevronDown size={14} color={T.muted} />
+
+        {menu && (
+          <>
+            <div onClick={() => setMenu(false)} style={{ position: "fixed", inset: 0, zIndex: 40 }} />
+            <div className="fade-up" style={{
+              position: "absolute", top: 50, right: 0, width: 240, zIndex: 50,
+              backgroundColor: T.canvas, border: `1px solid ${T.border}`,
+              borderRadius: 14, padding: 6,
+              boxShadow: "0 20px 60px rgba(0,0,0,.55)",
+            }}>
+              <div style={{ padding: "10px 12px 12px", borderBottom: `1px solid ${T.border}`, marginBottom: 6 }}>
+                <div style={{ fontSize: 13, fontWeight: 800 }}>{user.name}</div>
+                <div style={{
+                  fontSize: 11.5, color: T.muted, fontWeight: 600, marginTop: 2,
+                  whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                }}>{user.email}</div>
+              </div>
+
+              {!adminUnlocked ? (
+                <div className="hv" onClick={() => { setMenu(false); onAdminRequest(); }} style={{
+                  display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+                  borderRadius: 10, cursor: "pointer",
+                }}>
+                  <ShieldCheck size={15} color={T.text2} />
+                  <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>Admin panel</span>
+                  <div style={{ flex: 1 }} />
+                  <Lock size={12} color={T.muted} />
+                </div>
+              ) : (
+                <div style={{
+                  display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+                  borderRadius: 10,
+                }}>
+                  <ShieldCheck size={15} color={T.danger} />
+                  <span style={{ fontSize: 13, fontWeight: 700, color: T.danger }}>Admin ochilgan</span>
+                  <div style={{ flex: 1 }} />
+                  <Check size={13} color={T.success} />
+                </div>
+              )}
+
+              <div className="hv" onClick={() => { setMenu(false); onLogout(); }} style={{
+                display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+                borderRadius: 10, cursor: "pointer",
+              }}>
+                <LogOut size={15} color={T.text2} />
+                <span style={{ fontSize: 13, fontWeight: 700, color: T.text }}>Chiqish</span>
+              </div>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );
@@ -541,9 +800,13 @@ function ProjectsView({ onOpen }) {
     return <NewProject onCancel={() => setCreating(false)} onCreated={() => { setCreating(false); load(); }} />;
   }
 
-  const filtered = projects.filter((p) =>
-    (p.name + " " + (p.field || "")).toLowerCase().includes(query.toLowerCase())
-  );
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? projects.filter((p) =>
+        [p.name, p.field, p.brief, p.project_id, p.status]
+          .filter(Boolean).join(" ").toLowerCase().includes(q)
+      )
+    : projects;
 
   const totals = {
     all: projects.length,
@@ -576,14 +839,26 @@ function ProjectsView({ onOpen }) {
         <MiniStat label="Tahlil qilingan" value={totals.done} color={T.success} />
       </div>
 
-      {projects.length > 3 && (
+      {projects.length > 0 && (
         <div style={{ position: "relative", marginBottom: 16 }}>
-          <Search size={15} color={T.muted} style={{ position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)" }} />
+          <Search size={15} color={T.muted} style={{
+            position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)",
+            pointerEvents: "none",
+          }} />
           <input value={query} onChange={(e) => setQuery(e.target.value)}
-            placeholder="Loyiha qidirish…" style={{
-              width: "100%", background: T.canvas, border: `1px solid ${T.border}`,
-              borderRadius: 12, color: T.text, fontSize: 14, padding: "10px 14px 10px 40px",
+            placeholder="Loyiha nomi, soha yoki brief bo'yicha qidirish…" style={{
+              width: "100%", backgroundColor: T.canvas, border: `1px solid ${T.border}`,
+              borderRadius: 12, color: T.text, fontSize: 14,
+              padding: query ? "10px 40px 10px 40px" : "10px 14px 10px 40px",
             }} />
+          {query && (
+            <button className="btn" onClick={() => setQuery("")} title="Tozalash" style={{
+              position: "absolute", right: 8, top: "50%", transform: "translateY(-50%)",
+              width: 26, height: 26, borderRadius: 8, backgroundColor: "transparent",
+              display: "flex", alignItems: "center", justifyContent: "center",
+              color: T.muted, fontSize: 16, lineHeight: 1,
+            }}>×</button>
+          )}
         </div>
       )}
 
@@ -599,9 +874,28 @@ function ProjectsView({ onOpen }) {
         </div>
       )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
-        {filtered.map((p) => <ProjectCard key={p.project_id} p={p} onOpen={onOpen} />)}
-      </div>
+      {q && filtered.length === 0 && projects.length > 0 && (
+        <div className="card" style={{ padding: 36, textAlign: "center" }}>
+          <Search size={22} color={T.muted} style={{ marginBottom: 10 }} />
+          <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 3 }}>Hech narsa topilmadi</div>
+          <div style={{ fontSize: 12.5, color: T.muted, fontWeight: 600 }}>
+            &quot;{query}&quot; bo&apos;yicha loyiha yo&apos;q
+          </div>
+        </div>
+      )}
+
+      {filtered.length > 0 && (
+        <>
+          {q && (
+            <div style={{ fontSize: 12, color: T.muted, fontWeight: 700, marginBottom: 10 }}>
+              {filtered.length} ta natija
+            </div>
+          )}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 12 }}>
+            {filtered.map((p) => <ProjectCard key={p.project_id} p={p} onOpen={onOpen} />)}
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -626,7 +920,7 @@ function ProjectCard({ p, onOpen }) {
   const doneCount = steps.filter((s) => s.done).length;
 
   return (
-    <div className="hv card fade-up" onClick={() => onOpen(p)} style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14 }}>
+    <div className="card card-int fade-up" onClick={() => onOpen(p)} style={{ padding: 18, display: "flex", flexDirection: "column", gap: 14, cursor: "pointer" }}>
       <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
         <div style={{
           width: 40, height: 40, borderRadius: 12, background: T.s2, flexShrink: 0,
@@ -1311,8 +1605,8 @@ function ResultsTab({ project }) {
       {profiles.map((p) => {
         const prof = normaliseProfile(p.profile);
         return (
-          <div key={p.id} className="hv card fade-up" onClick={() => setOpenId(p.id)}
-            style={{ padding: 20 }}>
+          <div key={p.id} className="card card-int fade-up" onClick={() => setOpenId(p.id)}
+            style={{ padding: 20, cursor: "pointer" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
               <span style={{
                 fontSize: 11, fontWeight: 800, color: T.secondaryLight,
@@ -1746,20 +2040,12 @@ function AutoTextarea({ value, onChange, placeholder, style }) {
       value={value || ""}
       placeholder={placeholder}
       onChange={(e) => onChange(e.target.value)}
+      className="soft-input"
       style={{
         width: "100%", resize: "none", backgroundColor: "transparent",
         border: "1px solid transparent", borderRadius: 8, color: T.text,
         fontFamily: FONT, padding: "6px 8px", overflow: "hidden",
-        transition: "background-color 120ms ease-out, border-color 120ms ease-out",
         ...style,
-      }}
-      onFocus={(e) => {
-        e.target.style.backgroundColor = T.s1;
-        e.target.style.borderColor = T.border;
-      }}
-      onBlur={(e) => {
-        e.target.style.backgroundColor = "transparent";
-        e.target.style.borderColor = "transparent";
       }}
     />
   );
@@ -2521,6 +2807,381 @@ function ProfileView({ user }) {
           }}>Ulanishni uzish</button>
         )}
       </div>
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════
+   ADMIN GATE — password modal
+   ═══════════════════════════════════════════════════════════ */
+function AdminGate({ onClose, onSuccess }) {
+  const [pw, setPw] = useState("");
+  const [err, setErr] = useState("");
+
+  const submit = () => {
+    if (pw === ADMIN_PASSWORD) onSuccess();
+    else { setErr("Parol noto'g'ri"); setPw(""); }
+  };
+
+  return (
+    <div onClick={onClose} style={{
+      position: "fixed", inset: 0, zIndex: 200,
+      backgroundColor: "rgba(9,9,9,.85)", backdropFilter: "blur(6px)",
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 24,
+    }}>
+      <div onClick={(e) => e.stopPropagation()} className="fade-up card"
+        style={{ width: "100%", maxWidth: 360, padding: 28 }}>
+        <div style={{
+          width: 44, height: 44, borderRadius: 12, backgroundColor: "rgba(233,104,104,.12)",
+          display: "flex", alignItems: "center", justifyContent: "center", marginBottom: 16,
+        }}>
+          <ShieldCheck size={20} color={T.danger} />
+        </div>
+        <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 4 }}>Admin panel</div>
+        <div style={{ fontSize: 13, color: T.muted, fontWeight: 600, marginBottom: 20, lineHeight: "19px" }}>
+          Bu yerda ma&apos;lumotlarni butunlay o&apos;chirish mumkin. Ehtiyot bo&apos;ling.
+        </div>
+
+        <div style={{ position: "relative", marginBottom: 12 }}>
+          <Lock size={16} color={T.muted} style={{
+            position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)" }} />
+          <input type="password" value={pw} autoFocus
+            onChange={(e) => { setPw(e.target.value); setErr(""); }}
+            onKeyDown={(e) => e.key === "Enter" && submit()}
+            placeholder="Parol"
+            style={{
+              width: "100%", backgroundColor: T.s2, border: `1px solid ${T.border}`,
+              borderRadius: 12, color: T.text, fontSize: 15, padding: "11px 14px 11px 42px",
+            }} />
+        </div>
+
+        {err && <div className="fade-up" style={{
+          fontSize: 13, fontWeight: 700, color: T.danger, marginBottom: 12 }}>{err}</div>}
+
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn" onClick={submit} style={{
+            flex: 1, padding: "12px 0", borderRadius: 12, backgroundColor: T.primary,
+            color: "#090909", fontSize: 14, fontWeight: 800,
+          }}>Kirish</button>
+          <button className="btn" onClick={onClose} style={{
+            padding: "12px 20px", borderRadius: 12, backgroundColor: "transparent",
+            border: `1px solid ${T.border}`, color: T.text2, fontSize: 14, fontWeight: 700,
+          }}>Bekor</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminContent() {
+  const [tab, setTab] = useState("projects");
+  const [stats, setStats] = useState(null);
+
+  const loadStats = async () => {
+    const { data } = await supabase.from("storage_summary").select("*").maybeSingle();
+    setStats(data);
+  };
+  useEffect(() => { loadStats(); }, []);
+
+  const tabs = [
+    { id: "projects", label: "Loyihalar" },
+    { id: "brain", label: "Bilim bazasi" },
+    { id: "files", label: "Barcha fayllar" },
+    { id: "users", label: "Foydalanuvchilar" },
+  ];
+
+  return (
+    <div className="fade-up" style={{ maxWidth: 1000 }}>
+      <div className="card" style={{ padding: 22, marginBottom: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+          <div style={{
+            width: 42, height: 42, borderRadius: 12, backgroundColor: "rgba(233,104,104,.12)",
+            display: "flex", alignItems: "center", justifyContent: "center",
+          }}>
+            <ShieldCheck size={19} color={T.danger} />
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontSize: 18, fontWeight: 800 }}>Admin panel</div>
+            <div style={{ fontSize: 12, color: T.muted, fontWeight: 600, marginTop: 2 }}>
+              O&apos;chirilgan ma&apos;lumotni tiklab bo&apos;lmaydi
+            </div>
+          </div>
+        </div>
+
+        {stats && (
+          <div style={{
+            display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))",
+            gap: 10, marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.border}`,
+          }}>
+            <AdminStat label="Loyiha" value={stats.projects} />
+            <AdminStat label="Fayl" value={stats.files} />
+            <AdminStat label="Bo'lak" value={stats.chunks} />
+            <AdminStat label="Tahlil" value={stats.profiles} />
+            <AdminStat label="Savol to'plami" value={stats.question_sets} />
+            <AdminStat label="Foydalanuvchi" value={stats.users} />
+          </div>
+        )}
+      </div>
+
+      <div style={{
+        display: "inline-flex", gap: 4, backgroundColor: T.canvas,
+        border: `1px solid ${T.border}`, borderRadius: 12, padding: 4, marginBottom: 16,
+      }}>
+        {tabs.map((t) => (
+          <button key={t.id} className="btn" onClick={() => setTab(t.id)} style={{
+            padding: "8px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700,
+            backgroundColor: tab === t.id ? T.panel : "transparent",
+            color: tab === t.id ? T.primary : T.text2,
+          }}>{t.label}</button>
+        ))}
+      </div>
+
+      {tab === "projects" && <AdminProjects onChange={loadStats} />}
+      {tab === "brain" && <AdminFiles clientFilter={BRAIN_ID} onChange={loadStats} />}
+      {tab === "files" && <AdminFiles clientFilter={null} onChange={loadStats} />}
+      {tab === "users" && <AdminUsers />}
+    </div>
+  );
+}
+
+function AdminStat({ label, value }) {
+  return (
+    <div style={{ backgroundColor: T.s1, borderRadius: 10, padding: "10px 12px" }}>
+      <div style={{ fontSize: 20, fontWeight: 800, letterSpacing: "-0.02em" }}>{value ?? "—"}</div>
+      <div style={{ fontSize: 10.5, color: T.muted, fontWeight: 700, marginTop: 2 }}>{label}</div>
+    </div>
+  );
+}
+
+/* two-step delete button */
+function DeleteButton({ onConfirm, label = "O'chirish", busy }) {
+  const [armed, setArmed] = useState(false);
+  useEffect(() => {
+    if (!armed) return;
+    const t = setTimeout(() => setArmed(false), 4000);
+    return () => clearTimeout(t);
+  }, [armed]);
+
+  if (busy) {
+    return <RefreshCw size={14} color={T.muted} className="spin" />;
+  }
+
+  return armed ? (
+    <button className="btn fade-up" onClick={() => { setArmed(false); onConfirm(); }} style={{
+      display: "flex", alignItems: "center", gap: 5, padding: "6px 12px",
+      borderRadius: 9, backgroundColor: T.danger, color: "#090909",
+      fontSize: 11.5, fontWeight: 800, whiteSpace: "nowrap",
+    }}>
+      Tasdiqlash
+    </button>
+  ) : (
+    <button className="btn" onClick={() => setArmed(true)} title={label} style={{
+      display: "flex", alignItems: "center", justifyContent: "center",
+      width: 30, height: 30, borderRadius: 9, backgroundColor: "transparent",
+      border: `1px solid ${T.border}`, color: T.muted,
+    }}>
+      <Trash2 size={13} />
+    </button>
+  );
+}
+
+/* ── Projects ── */
+function AdminProjects({ onChange }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState(null);
+
+  const load = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("project_overview").select("*")
+      .order("created_at", { ascending: false });
+    setRows(data || []);
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+
+  const removeProject = async (pid) => {
+    setBusyId(pid);
+    // delete everything belonging to this project
+    await supabase.from("documents").delete().filter("metadata->>client_id", "eq", pid);
+    await supabase.from("interview_profiles").delete().eq("project_id", pid);
+    await supabase.from("interview_questions").delete().eq("project_id", pid);
+    await supabase.from("interview_transcripts").delete().eq("project_id", pid);
+    await supabase.from("upload_status").delete().eq("project_id", pid);
+    await supabase.from("projects").delete().eq("project_id", pid);
+    setBusyId(null);
+    load();
+    onChange && onChange();
+  };
+
+  if (loading) return <div style={{ color: T.muted, fontSize: 13, fontWeight: 600 }}>Yuklanmoqda…</div>;
+  if (!rows.length) return <div style={{ color: T.muted, fontSize: 13, fontWeight: 600 }}>Loyiha yo&apos;q</div>;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {rows.map((r) => (
+        <div key={r.project_id} className="card" style={{
+          padding: "14px 16px", display: "flex", alignItems: "center", gap: 14,
+        }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 700 }}>{r.name}</div>
+            <div style={{ fontSize: 11.5, color: T.muted, fontWeight: 600, marginTop: 3 }}>
+              {r.project_id} · {r.files_uploaded || 0} fayl · {r.interviews_analyzed || 0} tahlil
+              {" · "}{r.question_sets || 0} savol to&apos;plami
+            </div>
+          </div>
+          <DeleteButton busy={busyId === r.project_id}
+            onConfirm={() => removeProject(r.project_id)} />
+        </div>
+      ))}
+      <div style={{
+        fontSize: 11.5, color: T.muted, fontWeight: 600, padding: "8px 4px", lineHeight: "17px",
+      }}>
+        Loyihani o&apos;chirish uning barcha fayllari, tahlillari, savollari va
+        transkriptlarini ham o&apos;chiradi.
+      </div>
+    </div>
+  );
+}
+
+/* ── Files in the vector store ── */
+function AdminFiles({ clientFilter, onChange }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState(null);
+  const [q, setQ] = useState("");
+
+  const load = async () => {
+    setLoading(true);
+    let query = supabase.from("file_overview").select("*");
+    if (clientFilter) query = query.eq("client_id", clientFilter);
+    const { data } = await query;
+    const sorted = (data || []).sort((a, b) =>
+      String(b.uploaded_at || "").localeCompare(String(a.uploaded_at || "")));
+    setRows(sorted);
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, [clientFilter]);
+
+  const removeFile = async (fileId) => {
+    setBusyId(fileId);
+    await supabase.from("documents").delete().filter("metadata->>file_id", "eq", fileId);
+    await supabase.from("upload_status").delete().eq("file_id", fileId);
+    setBusyId(null);
+    load();
+    onChange && onChange();
+  };
+
+  const filtered = rows.filter((r) =>
+    ((r.file_name || "") + (r.file_id || "") + (r.client_id || ""))
+      .toLowerCase().includes(q.toLowerCase()));
+
+  if (loading) return <div style={{ color: T.muted, fontSize: 13, fontWeight: 600 }}>Yuklanmoqda…</div>;
+
+  return (
+    <div>
+      <div style={{ position: "relative", marginBottom: 12 }}>
+        <Search size={15} color={T.muted} style={{
+          position: "absolute", left: 14, top: "50%", transform: "translateY(-50%)" }} />
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Fayl qidirish…"
+          style={{
+            width: "100%", backgroundColor: T.canvas, border: `1px solid ${T.border}`,
+            borderRadius: 12, color: T.text, fontSize: 14, padding: "10px 14px 10px 40px",
+          }} />
+      </div>
+
+      {!filtered.length && (
+        <div style={{ color: T.muted, fontSize: 13, fontWeight: 600 }}>Fayl topilmadi</div>
+      )}
+
+      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+        {filtered.map((r) => (
+          <div key={r.file_id} className="card" style={{
+            padding: "12px 16px", display: "flex", alignItems: "center", gap: 14,
+          }}>
+            <div style={{
+              width: 32, height: 32, borderRadius: 9, backgroundColor: T.s2, flexShrink: 0,
+              display: "flex", alignItems: "center", justifyContent: "center",
+            }}>
+              <FileText size={14} color={T.secondaryLight} />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{
+                fontSize: 13.5, fontWeight: 700, whiteSpace: "nowrap",
+                overflow: "hidden", textOverflow: "ellipsis",
+              }}>{r.file_name || r.file_id}</div>
+              <div style={{ fontSize: 11, color: T.muted, fontWeight: 600, marginTop: 2 }}>
+                {r.client_id} · {r.doc_type || "—"} · {r.chunks} bo&apos;lak
+                {r.uploaded_at ? " · " + new Date(r.uploaded_at).toLocaleDateString("uz-UZ") : ""}
+              </div>
+            </div>
+            <DeleteButton busy={busyId === r.file_id}
+              onConfirm={() => removeFile(r.file_id)} />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ── Users ── */
+function AdminUsers() {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    const { data } = await supabase.from("app_users").select("*")
+      .order("created_at", { ascending: false });
+    setRows(data || []);
+    setLoading(false);
+  };
+  useEffect(() => { load(); }, []);
+
+  const toggle = async (email, current) => {
+    await supabase.from("app_users")
+      .update({ notifications_enabled: !current }).eq("email", email);
+    load();
+  };
+
+  const unlink = async (email) => {
+    await supabase.from("app_users")
+      .update({ telegram_chat_id: null, telegram_username: null }).eq("email", email);
+    load();
+  };
+
+  if (loading) return <div style={{ color: T.muted, fontSize: 13, fontWeight: 600 }}>Yuklanmoqda…</div>;
+  if (!rows.length) return <div style={{ color: T.muted, fontSize: 13, fontWeight: 600 }}>Foydalanuvchi yo&apos;q</div>;
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {rows.map((u) => (
+        <div key={u.email} className="card" style={{
+          padding: "12px 16px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap",
+        }}>
+          <div style={{ flex: 1, minWidth: 180 }}>
+            <div style={{ fontSize: 13.5, fontWeight: 700 }}>{u.full_name || u.email}</div>
+            <div style={{ fontSize: 11, color: T.muted, fontWeight: 600, marginTop: 2 }}>
+              {u.email}
+              {u.telegram_chat_id ? " · Telegram ulangan" : " · Telegram yo'q"}
+            </div>
+          </div>
+          <button className="btn" onClick={() => toggle(u.email, u.notifications_enabled)} style={{
+            padding: "6px 12px", borderRadius: 9, backgroundColor: "transparent",
+            border: `1px solid ${T.border}`,
+            color: u.notifications_enabled ? T.success : T.muted,
+            fontSize: 11.5, fontWeight: 700,
+          }}>
+            {u.notifications_enabled ? "Bildirishnoma yoqilgan" : "O'chirilgan"}
+          </button>
+          {u.telegram_chat_id && (
+            <button className="btn" onClick={() => unlink(u.email)} style={{
+              padding: "6px 12px", borderRadius: 9, backgroundColor: "transparent",
+              border: `1px solid ${T.border}`, color: T.text2, fontSize: 11.5, fontWeight: 700,
+            }}>Telegramni uzish</button>
+          )}
+        </div>
+      ))}
     </div>
   );
 }
