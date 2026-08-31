@@ -1101,6 +1101,7 @@ function NewProject({ onCancel, onCreated }) {
    ═══════════════════════════════════════════════════════════ */
 function ProjectDetail({ project, onBack, uploads, addUploads, retryUpload }) {
   const [tab, setTab] = useState("questions");
+  const [resultsDetailOpen, setResultsDetailOpen] = useState(false);
 
   const tabs = [
     { id: "questions", label: "Savollar" },
@@ -1108,8 +1109,12 @@ function ProjectDetail({ project, onBack, uploads, addUploads, retryUpload }) {
     { id: "results", label: "Natijalar" },
   ];
 
+  // The results table wants full width; the Batafsil detail view underneath
+  // it, and every other tab, read better at the normal contained width.
+  const wide = tab === "results" && !resultsDetailOpen;
+
   return (
-    <div className="fade-up" style={{ maxWidth: 900 }}>
+    <div className="fade-up" style={{ maxWidth: wide ? 1400 : 900, width: "100%", transition: "max-width 160ms ease-out" }}>
       <button className="btn" onClick={onBack} style={{
         display: "flex", alignItems: "center", gap: 6, background: "transparent",
         color: T.text2, fontSize: 13, fontWeight: 700, marginBottom: 14, padding: 0,
@@ -1146,7 +1151,9 @@ function ProjectDetail({ project, onBack, uploads, addUploads, retryUpload }) {
           retryUpload={retryUpload}
         />
       )}
-      {tab === "results" && <ResultsTab project={project} />}
+      {tab === "results" && (
+        <ResultsTab project={project} onDetailOpenChange={setResultsDetailOpen} />
+      )}
     </div>
   );
 }
@@ -1539,6 +1546,126 @@ const FIELD_GROUPS = [
   },
 ];
 
+/* CustDev-only field groups — used on the Batafsil (detail) page for
+   customer-type interviews. Deliberately smaller than FIELD_GROUPS: no
+   biznes raqamlari / maqsad / pozitsioner / offer / kontent / yetishmayotgan
+   ma'lumot sections, since those are expert-interview specific. */
+const CUSTDEV_FIELD_GROUPS = [
+  {
+    title: "Respondent ma'lumotlari",
+    icon: User,
+    fields: [
+      ["manzil", "Manzil"],
+      ["demografik_malumotlar", "Demografik ma'lumot"],
+    ],
+  },
+  {
+    title: "Og'riqlar, xohishlar va e'tirozlar",
+    icon: AlertCircle,
+    fields: [
+      ["ogriq_nuqtalari", "Og'riqlar"],
+      ["xohishlar", "Xohishlar"],
+      ["qorquvlar", "Qo'rquvlar"],
+      ["etirozlar", "E'tirozlar"],
+    ],
+  },
+  {
+    title: "Insayt",
+    icon: Sparkles,
+    fields: [
+      ["insayt", "Insayt"],
+    ],
+  },
+];
+
+/* Columns for the Notion-style CustDev results table.
+   `keys` lists possible field-name aliases — the first one present on the
+   profile wins. If your WF4 extraction prompt uses different key names for
+   these, add them to the relevant alias list below. */
+const CUSTDEV_COLUMNS = [
+  { label: "Manzil", keys: ["manzil", "hudud", "location"] },
+  { label: "Demografik ma'lumot", keys: ["demografik_malumotlar", "demografik", "auditoriya"] },
+  { label: "Og'riqlar", keys: ["ogriq_nuqtalari", "ogriqlar"] },
+  { label: "Xohishlar", keys: ["xohishlar", "istaklar"] },
+  { label: "Qo'rquvlar", keys: ["qorquvlar"] },
+  { label: "E'tirozlar", keys: ["etirozlar"] },
+  { label: "Insayt", keys: ["insayt", "insight", "muhim_faktlar"] },
+];
+
+function pickField(profile, keys) {
+  for (const k of keys) {
+    const v = profile[k];
+    if (Array.isArray(v)) { if (v.length) return v; continue; }
+    if (v !== undefined && v !== null && String(v).trim() !== "") return v;
+  }
+  return null;
+}
+
+function cellText(v) {
+  if (v === null || v === undefined) return "—";
+  if (Array.isArray(v)) return v.join(", ");
+  return String(v);
+}
+
+const thStyle = {
+  textAlign: "left", padding: "12px 16px", fontSize: 11.5, fontWeight: 800,
+  color: T.text2, textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap",
+};
+const tdStyle = {
+  padding: "14px 16px", fontSize: 13.5, fontWeight: 500, color: T.text,
+  verticalAlign: "top", lineHeight: "20px",
+};
+
+/* Compact Notion export/open button used inline in a table row.
+   Same logic as the big button on the Batafsil page, just smaller and
+   without the "unsaved changes" auto-save step. */
+function NotionExportCell({ p, onSynced }) {
+  const [busy, setBusy] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  const needsSync = p.notion_page_id
+    ? (!p.notion_synced_at || new Date(p.updated_at || p.created_at) > new Date(p.notion_synced_at))
+    : false;
+
+  const run = async (e) => {
+    e.stopPropagation();
+    if (p.notion_page_id && !needsSync) {
+      window.open(p.notion_url, "_blank");
+      return;
+    }
+    setBusy(true);
+    setFailed(false);
+    try {
+      const res = await fetch("/api/notion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile_id: p.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      onSynced && onSynced(p.id, data);
+    } catch (err) {
+      setFailed(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const label = failed ? "Xato — qayta" : !p.notion_page_id ? "Eksport" : needsSync ? "Yangilash" : "Ochish";
+  const color = failed ? T.danger : !p.notion_page_id ? T.primary : needsSync ? T.warning : T.success;
+
+  return (
+    <button className="btn" onClick={run} disabled={busy} style={{
+      display: "flex", alignItems: "center", gap: 6, padding: "6px 12px",
+      borderRadius: 9, backgroundColor: `${color}1a`, border: `1px solid ${color}44`,
+      color, fontSize: 11.5, fontWeight: 800, whiteSpace: "nowrap",
+    }}>
+      {busy ? <RefreshCw size={11} className="spin" /> : null}
+      {busy ? "…" : label}
+    </button>
+  );
+}
+
 /* profile may arrive as an object OR as a JSON string — normalise it */
 function normaliseProfile(raw) {
   if (!raw) return {};
@@ -1554,10 +1681,11 @@ function normaliseProfile(raw) {
   return {};
 }
 
-function ResultsTab({ project }) {
+function ResultsTab({ project, onDetailOpenChange }) {
   const [profiles, setProfiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState(null);
+  const [hoverId, setHoverId] = useState(null);
 
   const load = async () => {
     const { data } = await supabase
@@ -1570,6 +1698,9 @@ function ResultsTab({ project }) {
   };
 
   useEffect(() => { load(); }, [project.project_id]);
+
+  const openDetail = (id) => { setOpenId(id); onDetailOpenChange && onDetailOpenChange(true); };
+  const closeDetail = () => { setOpenId(null); onDetailOpenChange && onDetailOpenChange(false); };
 
   if (loading) return <div style={{ color: T.muted, fontSize: 13, fontWeight: 600 }}>Yuklanmoqda…</div>;
 
@@ -1586,13 +1717,27 @@ function ResultsTab({ project }) {
   }
 
   const open = profiles.find((p) => p.id === openId);
+
+  // Merge changes from the Batafsil page (edits, saves, Notion sync) straight
+  // into the table's local copy — so the table is already current the moment
+  // you go back, no manual "Yangilash" needed.
+  const patchProfile = (id, patch) =>
+    setProfiles((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+
   if (open) {
-    return <InterviewDetail p={open} project={project} onBack={() => setOpenId(null)} />;
+    return (
+      <InterviewDetail
+        p={open}
+        project={project}
+        onBack={closeDetail}
+        onSaved={(patch) => patchProfile(open.id, patch)}
+      />
+    );
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+    <div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
         <button className="btn" onClick={load} style={{
           display: "flex", alignItems: "center", gap: 6, backgroundColor: "transparent",
           border: `1px solid ${T.border}`, borderRadius: 10, padding: "6px 12px",
@@ -1602,74 +1747,95 @@ function ResultsTab({ project }) {
         </button>
       </div>
 
-      {profiles.map((p) => {
-        const prof = normaliseProfile(p.profile);
-        return (
-          <div key={p.id} className="card card-int fade-up" onClick={() => setOpenId(p.id)}
-            style={{ padding: 20, cursor: "pointer" }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10, flexWrap: "wrap" }}>
-              <span style={{
-                fontSize: 11, fontWeight: 800, color: T.secondaryLight,
-                backgroundColor: "rgba(140,115,246,.12)", borderRadius: 999, padding: "5px 13px",
-              }}>
-                {p.profile_type === "customer" ? "Mijoz ovozi" : "Ekspert ovozi"}
-              </span>
-              <span style={{ fontSize: 16, fontWeight: 800 }}>{prof.ism || "Nomalum"}</span>
-              {prof.soha && (
-                <span style={{ fontSize: 12, color: T.muted, fontWeight: 600 }}>· {prof.soha}</span>
-              )}
-              <div style={{ flex: 1 }} />
-              <span style={{ fontSize: 12, fontWeight: 700, color: T.primary,
-                display: "flex", alignItems: "center", gap: 5 }}>
-                Batafsil ko&apos;rish →
-              </span>
-            </div>
-
-            {p.summary && (
-              <div style={{
-                fontSize: 13.5, lineHeight: "21px", color: T.text2,
-                display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical",
-                overflow: "hidden",
-              }}>{p.summary}</div>
-            )}
-
-            <div style={{ display: "flex", gap: 16, marginTop: 12, paddingTop: 12,
-              borderTop: `1px solid ${T.border}`, flexWrap: "wrap" }}>
-              {(prof.biznes_raqamlari || {}).hozirgi_sotuv && (
-                <QuickStat label="Hozirgi sotuv" value={prof.biznes_raqamlari.hozirgi_sotuv} />
-              )}
-              {(prof.maqsad_va_missiya || {}).sotuv_maqsadi && (
-                <QuickStat label="Maqsad" value={prof.maqsad_va_missiya.sotuv_maqsadi} />
-              )}
-              {Array.isArray(prof.ogriq_nuqtalari) && prof.ogriq_nuqtalari.length > 0 && (
-                <QuickStat label="Og'riqlar" value={`${prof.ogriq_nuqtalari.length} ta`} />
-              )}
-              {Array.isArray(prof.kuchli_iboralar) && prof.kuchli_iboralar.length > 0 && (
-                <QuickStat label="Iboralar" value={`${prof.kuchli_iboralar.length} ta`} />
-              )}
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function QuickStat({ label, value }) {
-  return (
-    <div>
-      <div style={{ fontSize: 10, fontWeight: 800, color: T.muted,
-        textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 3 }}>{label}</div>
-      <div style={{ fontSize: 13, fontWeight: 700, color: T.text,
-        maxWidth: 220, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-        {value}
+      <div className="card" style={{ overflow: "hidden", width: "100%" }}>
+        <div style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.border}`, backgroundColor: T.s1 }}>
+                <th style={{
+                  ...thStyle, position: "sticky", left: 0, zIndex: 2,
+                  backgroundColor: T.s1, borderRight: `1px solid ${T.border}`,
+                }}>Ism</th>
+                {CUSTDEV_COLUMNS.map((c, i) => (
+                  <th key={c.label} style={{
+                    ...thStyle,
+                    borderRight: i < CUSTDEV_COLUMNS.length - 1 ? `1px solid ${T.border}` : "none",
+                  }}>{c.label}</th>
+                ))}
+                <th style={{ ...thStyle, textAlign: "right" }}>Amallar</th>
+              </tr>
+            </thead>
+            <tbody>
+              {profiles.map((p) => {
+                const prof = normaliseProfile(p.profile);
+                const hovered = hoverId === p.id;
+                const rowBg = hovered ? "rgba(255,255,255,0.035)" : "transparent";
+                return (
+                  <tr key={p.id}
+                    onMouseEnter={() => setHoverId(p.id)}
+                    onMouseLeave={() => setHoverId(null)}
+                    style={{
+                      borderBottom: `1px solid ${T.border}`,
+                      backgroundColor: rowBg,
+                      transition: "background-color 120ms ease-out",
+                    }}
+                  >
+                    <td style={{
+                      ...tdStyle, position: "sticky", left: 0, zIndex: 1,
+                      backgroundColor: hovered ? T.s1 : T.canvas,
+                      borderRight: `1px solid ${T.border}`,
+                      transition: "background-color 120ms ease-out",
+                    }}>
+                      <button className="btn" onClick={() => openDetail(p.id)} style={{
+                        display: "flex", alignItems: "center", gap: 7, padding: "8px 14px",
+                        borderRadius: 9, backgroundColor: T.s2, border: `1px solid ${T.border}`,
+                        color: T.text, fontSize: 13.5, fontWeight: 800, whiteSpace: "nowrap",
+                      }}>
+                        {prof.ism || "Nomalum"}
+                      </button>
+                    </td>
+                    {CUSTDEV_COLUMNS.map((c, i) => {
+                      const val = pickField(prof, c.keys);
+                      return (
+                        <td key={c.label} style={{
+                          ...tdStyle,
+                          borderRight: i < CUSTDEV_COLUMNS.length - 1 ? `1px solid ${T.border}` : "none",
+                        }} title={cellText(val)}>
+                          <div style={{
+                            minWidth: 200, maxWidth: 320,
+                            display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
+                            overflow: "hidden",
+                            color: val ? T.text : T.muted,
+                          }}>{cellText(val)}</div>
+                        </td>
+                      );
+                    })}
+                    <td style={{ ...tdStyle, textAlign: "right", whiteSpace: "nowrap" }}>
+                      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+                        <button className="btn" onClick={() => openDetail(p.id)} style={{
+                          padding: "7px 14px", borderRadius: 9, backgroundColor: T.panel,
+                          color: T.primary, fontSize: 12, fontWeight: 800, whiteSpace: "nowrap",
+                        }}>Batafsil</button>
+                        <NotionExportCell p={p} onSynced={(id, data) => patchProfile(id, {
+                          notion_page_id: data.notion_page_id,
+                          notion_url: data.notion_url,
+                          notion_synced_at: new Date().toISOString(),
+                        })} />
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );
 }
 
 /* ─── FULL DETAIL PAGE — editable + Notion export ───────── */
-function InterviewDetail({ p, project, onBack }) {
+function InterviewDetail({ p, project, onBack, onSaved }) {
   const [profile, setProfile] = useState(() => normaliseProfile(p.profile));
   const [summary, setSummary] = useState(p.summary || "");
   const [tab, setTab] = useState("profile");
@@ -1722,7 +1888,9 @@ function InterviewDetail({ p, project, onBack }) {
     setSaving(false);
     if (!error) {
       setDirty(false);
-      setNotion((n) => ({ ...n, updated_at: new Date().toISOString() }));
+      const now = new Date().toISOString();
+      setNotion((n) => ({ ...n, updated_at: now }));
+      onSaved && onSaved({ profile, summary, updated_at: now });
     }
   };
 
@@ -1738,11 +1906,18 @@ function InterviewDetail({ p, project, onBack }) {
       });
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      const now = new Date().toISOString();
       setNotion({
         page_id: data.notion_page_id,
         url: data.notion_url,
-        synced_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
+        synced_at: now,
+        updated_at: now,
+      });
+      onSaved && onSaved({
+        notion_page_id: data.notion_page_id,
+        notion_url: data.notion_url,
+        notion_synced_at: now,
+        updated_at: now,
       });
       setNotionMsg("Notion yangilandi");
       setTimeout(() => setNotionMsg(""), 3000);
@@ -1771,7 +1946,8 @@ function InterviewDetail({ p, project, onBack }) {
   const copyAll = () => {
     const lines = [`# ${profile.ism || "Intervyu"} — ${project.name}`, ""];
     if (summary) { lines.push("## XULOSA", summary, ""); }
-    FIELD_GROUPS.forEach((g) => {
+    const groupsForCopy = p.profile_type === "customer" ? CUSTDEV_FIELD_GROUPS : FIELD_GROUPS;
+    groupsForCopy.forEach((g) => {
       const rows = g.fields.filter(([k]) => hasValue(getVal(g, k)));
       if (!rows.length) return;
       lines.push(`## ${g.title.toUpperCase()}`);
@@ -1838,10 +2014,6 @@ function InterviewDetail({ p, project, onBack }) {
                 .filter(Boolean).join(" · ") || "—"}
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
-              <span style={{
-                fontSize: 11, fontWeight: 800, color: T.secondaryLight,
-                backgroundColor: "rgba(140,115,246,.12)", borderRadius: 999, padding: "4px 12px",
-              }}>{p.profile_type === "customer" ? "Mijoz ovozi" : "Ekspert ovozi"}</span>
               {dirty && (
                 <span className="fade-up" style={{
                   fontSize: 11, fontWeight: 800, color: T.warning,
@@ -1945,7 +2117,7 @@ function InterviewDetail({ p, project, onBack }) {
 
       {tab === "profile" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          {FIELD_GROUPS.map((g) => {
+          {(p.profile_type === "customer" ? CUSTDEV_FIELD_GROUPS : FIELD_GROUPS).map((g) => {
             const Icon = g.icon;
             const isNumbers = g.nested === "biznes_raqamlari";
             const isGoals = g.nested === "maqsad_va_missiya";
