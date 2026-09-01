@@ -1109,12 +1109,14 @@ function ProjectDetail({ project, onBack, uploads, addUploads, retryUpload }) {
     { id: "results", label: "Natijalar" },
   ];
 
-  // The results table wants full width; the Batafsil detail view underneath
-  // it, and every other tab, read better at the normal contained width.
+  // the results table wants full width; everything else reads better contained
   const wide = tab === "results" && !resultsDetailOpen;
 
   return (
-    <div className="fade-up" style={{ maxWidth: wide ? 1400 : 900, width: "100%", transition: "max-width 160ms ease-out" }}>
+    <div className="fade-up" style={{
+      maxWidth: wide ? 1400 : 900, width: "100%",
+      transition: "max-width 160ms ease-out",
+    }}>
       <button className="btn" onClick={onBack} style={{
         display: "flex", alignItems: "center", gap: 6, background: "transparent",
         color: T.text2, fontSize: 13, fontWeight: 700, marginBottom: 14, padding: 0,
@@ -1293,10 +1295,33 @@ function QuestionsTab({ project }) {
 /* ─── Interview tab ─────────────────────────────────────── */
 function InterviewTab({ project, uploads = [], addUploads, retryUpload }) {
   const [drag, setDrag] = useState(false);
-  const [profileType, setProfileType] = useState("expert");
+  const [profileType, setProfileType] = useState("customer");
   const inputRef = useRef(null);
 
   const myUploads = uploads.filter((u) => u.clientId === project.project_id);
+  const [history, setHistory] = useState([]);
+  const [loadingH, setLoadingH] = useState(true);
+
+  /* Files already in the database for this project — survives refresh */
+  const loadHistory = async () => {
+    const { data } = await supabase
+      .from("file_overview")
+      .select("*")
+      .eq("client_id", project.project_id);
+    const rows = (data || []).sort((a, b) =>
+      String(b.uploaded_at || "").localeCompare(String(a.uploaded_at || "")));
+    setHistory(rows);
+    setLoadingH(false);
+  };
+
+  useEffect(() => { loadHistory(); }, [project.project_id]);
+
+  // refresh the history whenever an in-flight upload completes
+  const doneCount = myUploads.filter((u) => u.stage === "done").length;
+  useEffect(() => { if (doneCount > 0) loadHistory(); }, [doneCount]);
+
+  const liveIds = new Set(myUploads.map((u) => u.fileId).filter(Boolean));
+  const pastOnly = history.filter((h) => !liveIds.has(h.file_id));
 
   const add = (list) => addUploads(list, project.project_id, `interview_${profileType}`);
 
@@ -1307,7 +1332,7 @@ function InterviewTab({ project, uploads = [], addUploads, retryUpload }) {
           Intervyu turi
         </span>
         <div style={{ display: "inline-flex", gap: 4, backgroundColor: T.canvas, border: `1px solid ${T.border}`, borderRadius: 12, padding: 4 }}>
-          {[{ id: "expert", label: "Ekspert" }, { id: "customer", label: "Mijoz" }].map((t) => (
+          {[{ id: "customer", label: "Mijoz" }, { id: "expert", label: "Ekspert" }].map((t) => (
             <button key={t.id} className="btn" onClick={() => setProfileType(t.id)} style={{
               padding: "7px 16px", borderRadius: 8, fontSize: 13, fontWeight: 700,
               backgroundColor: profileType === t.id ? T.panel : "transparent",
@@ -1350,11 +1375,74 @@ function InterviewTab({ project, uploads = [], addUploads, retryUpload }) {
         eksport qiling — hajmi bir necha barobar kichrayadi, yuklash tezlashadi.
       </div>
 
-      <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        {myUploads.map((f) => (
-          <UploadRow key={f.id} f={f} onRetry={() => retryUpload(f.id)} />
-        ))}
+      {myUploads.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+          {myUploads.map((f) => (
+            <UploadRow key={f.id} f={f} onRetry={() => retryUpload(f.id)} />
+          ))}
+        </div>
+      )}
+
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <div style={{
+          fontSize: 11, fontWeight: 800, color: T.text2,
+          textTransform: "uppercase", letterSpacing: "0.07em",
+        }}>Yuklangan fayllar</div>
+        <button className="btn" onClick={loadHistory} style={{
+          display: "flex", alignItems: "center", gap: 6, backgroundColor: "transparent",
+          border: `1px solid ${T.border}`, borderRadius: 10, padding: "6px 12px",
+          color: T.text2, fontSize: 12, fontWeight: 700,
+        }}>
+          <RefreshCw size={12} /> Yangilash
+        </button>
       </div>
+
+      {loadingH ? (
+        <div style={{ fontSize: 13, color: T.muted, fontWeight: 600 }}>Yuklanmoqda…</div>
+      ) : pastOnly.length === 0 ? (
+        <div style={{ fontSize: 13, color: T.muted, fontWeight: 600, padding: "4px 2px" }}>
+          Bu loyihada hali fayl yo&apos;q
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {pastOnly.map((h) => {
+            const isAudio = /\.(mp3|m4a|ogg|wav|mp4)$/i.test(h.file_name || h.file_id || "");
+            const HIcon = isAudio ? Mic : FileText;
+            const typeLabel = String(h.doc_type || "").includes("customer")
+              ? "Mijoz intervyusi"
+              : String(h.doc_type || "").includes("interview")
+                ? "Ekspert intervyusi"
+                : (h.doc_type || "—");
+            return (
+              <div key={h.file_id} className="card" style={{
+                padding: "12px 16px", display: "flex", alignItems: "center", gap: 14,
+              }}>
+                <div style={{
+                  width: 34, height: 34, borderRadius: 10, backgroundColor: T.s2, flexShrink: 0,
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                }}>
+                  <HIcon size={15} color={T.secondaryLight} />
+                </div>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{
+                    fontSize: 13.5, fontWeight: 700, whiteSpace: "nowrap",
+                    overflow: "hidden", textOverflow: "ellipsis",
+                  }}>{h.file_name || h.file_id}</div>
+                  <div style={{ fontSize: 11, color: T.muted, fontWeight: 600, marginTop: 2 }}>
+                    {typeLabel} · {h.chunks} bo&apos;lak
+                    {h.uploaded_at ? " · " + new Date(h.uploaded_at).toLocaleDateString("uz-UZ") : ""}
+                  </div>
+                </div>
+                <span style={{
+                  fontSize: 11, fontWeight: 800, color: T.success,
+                  backgroundColor: "rgba(143,232,106,.1)", borderRadius: 999,
+                  padding: "4px 12px", display: "flex", alignItems: "center", gap: 4,
+                }}><Check size={11} /> Bazada</span>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
@@ -1546,15 +1634,13 @@ const FIELD_GROUPS = [
   },
 ];
 
-/* CustDev-only field groups — used on the Batafsil (detail) page for
-   customer-type interviews. Deliberately smaller than FIELD_GROUPS: no
-   biznes raqamlari / maqsad / pozitsioner / offer / kontent / yetishmayotgan
-   ma'lumot sections, since those are expert-interview specific. */
+/* CustDev-only field groups — used on the detail page for customer interviews */
 const CUSTDEV_FIELD_GROUPS = [
   {
     title: "Respondent ma'lumotlari",
     icon: User,
     fields: [
+      ["ism", "Ism"],
       ["manzil", "Manzil"],
       ["demografik_malumotlar", "Demografik ma'lumot"],
     ],
@@ -1570,18 +1656,35 @@ const CUSTDEV_FIELD_GROUPS = [
     ],
   },
   {
-    title: "Insayt",
+    title: "Xarid qarori",
+    icon: Target,
+    fields: [
+      ["hozirgi_yechim", "Hozirgi yechim"],
+      ["byudjet_tayyorlik", "Byudjet tayyorligi"],
+      ["qaror_jarayoni", "Qaror jarayoni"],
+      ["kutilayotgan_natija", "Kutilayotgan natija"],
+    ],
+  },
+  {
+    title: "Insayt va kontent",
     icon: Sparkles,
     fields: [
       ["insayt", "Insayt"],
+      ["kuchli_iboralar", "Kuchli iboralar"],
+      ["muhim_faktlar", "Muhim faktlar"],
+    ],
+  },
+  {
+    title: "Yetishmayotgan ma'lumot",
+    icon: AlertCircle,
+    fields: [
+      ["yetishmayotgan_malumot", "Keyingi intervyuda so'rash kerak"],
     ],
   },
 ];
 
-/* Columns for the Notion-style CustDev results table.
-   `keys` lists possible field-name aliases — the first one present on the
-   profile wins. If your WF4 extraction prompt uses different key names for
-   these, add them to the relevant alias list below. */
+/* Columns for the Notion-style results table.
+   `keys` are aliases — the first one present on the profile wins. */
 const CUSTDEV_COLUMNS = [
   { label: "Manzil", keys: ["manzil", "hudud", "location"] },
   { label: "Demografik ma'lumot", keys: ["demografik_malumotlar", "demografik", "auditoriya"] },
@@ -1616,9 +1719,7 @@ const tdStyle = {
   verticalAlign: "top", lineHeight: "20px",
 };
 
-/* Compact Notion export/open button used inline in a table row.
-   Same logic as the big button on the Batafsil page, just smaller and
-   without the "unsaved changes" auto-save step. */
+/* Compact Notion button used inline in a table row */
 function NotionExportCell({ p, onSynced }) {
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -1651,8 +1752,12 @@ function NotionExportCell({ p, onSynced }) {
     }
   };
 
-  const label = failed ? "Xato — qayta" : !p.notion_page_id ? "Eksport" : needsSync ? "Yangilash" : "Ochish";
-  const color = failed ? T.danger : !p.notion_page_id ? T.primary : needsSync ? T.warning : T.success;
+  const label = failed ? "Xato — qayta"
+    : !p.notion_page_id ? "Eksport"
+    : needsSync ? "Yangilash" : "Ochish";
+  const color = failed ? T.danger
+    : !p.notion_page_id ? T.primary
+    : needsSync ? T.warning : T.success;
 
   return (
     <button className="btn" onClick={run} disabled={busy} style={{
@@ -1686,6 +1791,8 @@ function ResultsTab({ project, onDetailOpenChange }) {
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState(null);
   const [hoverId, setHoverId] = useState(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMsg, setBulkMsg] = useState("");
 
   const load = async () => {
     const { data } = await supabase
@@ -1702,6 +1809,9 @@ function ResultsTab({ project, onDetailOpenChange }) {
   const openDetail = (id) => { setOpenId(id); onDetailOpenChange && onDetailOpenChange(true); };
   const closeDetail = () => { setOpenId(null); onDetailOpenChange && onDetailOpenChange(false); };
 
+  const patchProfile = (id, patch) =>
+    setProfiles((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
+
   if (loading) return <div style={{ color: T.muted, fontSize: 13, fontWeight: 600 }}>Yuklanmoqda…</div>;
 
   if (profiles.length === 0) {
@@ -1717,13 +1827,6 @@ function ResultsTab({ project, onDetailOpenChange }) {
   }
 
   const open = profiles.find((p) => p.id === openId);
-
-  // Merge changes from the Batafsil page (edits, saves, Notion sync) straight
-  // into the table's local copy — so the table is already current the moment
-  // you go back, no manual "Yangilash" needed.
-  const patchProfile = (id, patch) =>
-    setProfiles((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)));
-
   if (open) {
     return (
       <InterviewDetail
@@ -1735,9 +1838,59 @@ function ResultsTab({ project, onDetailOpenChange }) {
     );
   }
 
+  const pendingCount = profiles.filter((p) =>
+    !p.notion_page_id ||
+    !p.notion_synced_at ||
+    new Date(p.updated_at || p.created_at) > new Date(p.notion_synced_at)
+  ).length;
+
+  const exportAll = async () => {
+    setBulkBusy(true);
+    setBulkMsg("");
+    try {
+      const res = await fetch("/api/notion", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ project_id: project.project_id }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+      setBulkMsg(`${data.count || profiles.length} ta natija Notion'ga yuborildi`);
+      await load();
+      setTimeout(() => setBulkMsg(""), 4000);
+    } catch (e) {
+      setBulkMsg("Xatolik: " + String(e.message || e));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   return (
     <div>
-      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 10 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 12, flexWrap: "wrap" }}>
+        <button className="btn" onClick={exportAll} disabled={bulkBusy} style={{
+          display: "flex", alignItems: "center", gap: 8, padding: "10px 18px",
+          borderRadius: 12,
+          backgroundColor: pendingCount > 0 ? T.primary : T.panel,
+          color: pendingCount > 0 ? "#090909" : T.text2,
+          fontSize: 13, fontWeight: 800,
+          boxShadow: pendingCount > 0 ? `0 0 24px ${T.primaryGlow}` : "none",
+        }}>
+          {bulkBusy ? <RefreshCw size={14} className="spin" /> : <Upload size={14} />}
+          {bulkBusy ? "Yuborilmoqda…"
+            : pendingCount > 0 ? `Hammasini Notion'ga yuborish (${pendingCount})`
+            : "Hammasi Notion'da"}
+        </button>
+
+        {bulkMsg && (
+          <span className="fade-up" style={{
+            fontSize: 12, fontWeight: 700,
+            color: bulkMsg.startsWith("Xatolik") ? T.danger : T.success,
+          }}>{bulkMsg}</span>
+        )}
+
+        <div style={{ flex: 1 }} />
+
         <button className="btn" onClick={load} style={{
           display: "flex", alignItems: "center", gap: 6, backgroundColor: "transparent",
           border: `1px solid ${T.border}`, borderRadius: 10, padding: "6px 12px",
@@ -1769,14 +1922,13 @@ function ResultsTab({ project, onDetailOpenChange }) {
               {profiles.map((p) => {
                 const prof = normaliseProfile(p.profile);
                 const hovered = hoverId === p.id;
-                const rowBg = hovered ? "rgba(255,255,255,0.035)" : "transparent";
                 return (
                   <tr key={p.id}
                     onMouseEnter={() => setHoverId(p.id)}
                     onMouseLeave={() => setHoverId(null)}
                     style={{
                       borderBottom: `1px solid ${T.border}`,
-                      backgroundColor: rowBg,
+                      backgroundColor: hovered ? "rgba(255,255,255,0.035)" : "transparent",
                       transition: "background-color 120ms ease-out",
                     }}
                   >
@@ -1786,13 +1938,28 @@ function ResultsTab({ project, onDetailOpenChange }) {
                       borderRight: `1px solid ${T.border}`,
                       transition: "background-color 120ms ease-out",
                     }}>
-                      <button className="btn" onClick={() => openDetail(p.id)} style={{
-                        display: "flex", alignItems: "center", gap: 7, padding: "8px 14px",
-                        borderRadius: 9, backgroundColor: T.s2, border: `1px solid ${T.border}`,
-                        color: T.text, fontSize: 13.5, fontWeight: 800, whiteSpace: "nowrap",
-                      }}>
-                        {prof.ism || "Nomalum"}
-                      </button>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                        <button className="btn" onClick={() => openDetail(p.id)} style={{
+                          display: "flex", alignItems: "center", gap: 7, padding: "8px 14px",
+                          borderRadius: 9, backgroundColor: T.s2, border: `1px solid ${T.border}`,
+                          color: T.text, fontSize: 13.5, fontWeight: 800, whiteSpace: "nowrap",
+                        }}>
+                          {prof.ism || "Nomalum"}
+                        </button>
+                        {p.notion_url && (
+                          <a href={p.notion_url} target="_blank" rel="noreferrer"
+                            className="btn" title="Notionda ochish"
+                            onClick={(e) => e.stopPropagation()}
+                            style={{
+                              display: "flex", alignItems: "center", justifyContent: "center",
+                              width: 28, height: 28, borderRadius: 8, flexShrink: 0,
+                              backgroundColor: "transparent", border: `1px solid ${T.border}`,
+                              color: T.text2, textDecoration: "none",
+                            }}>
+                            <ArrowLeft size={12} style={{ transform: "rotate(135deg)" }} />
+                          </a>
+                        )}
+                      </div>
                     </td>
                     {CUSTDEV_COLUMNS.map((c, i) => {
                       const val = pickField(prof, c.keys);
@@ -2014,6 +2181,10 @@ function InterviewDetail({ p, project, onBack, onSaved }) {
                 .filter(Boolean).join(" · ") || "—"}
             </div>
             <div style={{ display: "flex", gap: 8, marginTop: 10, flexWrap: "wrap" }}>
+              <span style={{
+                fontSize: 11, fontWeight: 800, color: T.secondaryLight,
+                backgroundColor: "rgba(140,115,246,.12)", borderRadius: 999, padding: "4px 12px",
+              }}>{p.profile_type === "customer" ? "Mijoz ovozi" : "Ekspert ovozi"}</span>
               {dirty && (
                 <span className="fade-up" style={{
                   fontSize: 11, fontWeight: 800, color: T.warning,
