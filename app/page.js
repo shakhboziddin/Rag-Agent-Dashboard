@@ -1172,7 +1172,8 @@ function ProjectDetail({ project, onBack, uploads, addUploads, retryUpload }) {
 
   return (
     <div className="fade-up" style={{
-      maxWidth: wide ? 1400 : 900, width: "100%",
+      // the table uses the full viewport; ctrl+minus therefore gains real space
+      maxWidth: wide ? "none" : 900, width: "100%",
       transition: "max-width 160ms ease-out",
     }}>
       <button className="btn" onClick={onBack} style={{
@@ -1771,13 +1772,100 @@ function cellText(v) {
 }
 
 const thStyle = {
-  textAlign: "left", padding: "12px 16px", fontSize: 11.5, fontWeight: 800,
-  color: T.text2, textTransform: "uppercase", letterSpacing: "0.06em", whiteSpace: "nowrap",
+  textAlign: "left", padding: "12px 14px", fontSize: 11, fontWeight: 800,
+  color: T.text2, textTransform: "uppercase", letterSpacing: "0.06em",
+  whiteSpace: "nowrap", userSelect: "none",
 };
 const tdStyle = {
-  padding: "14px 16px", fontSize: 13.5, fontWeight: 500, color: T.text,
-  verticalAlign: "top", lineHeight: "20px",
+  padding: "13px 14px", fontSize: 13, fontWeight: 500, color: T.text,
+  verticalAlign: "top", lineHeight: "19px",
 };
+
+/* One table cell.
+   Collapsed: clamped to N lines with a soft fade instead of a hard cut.
+   The "ko'proq" affordance only appears when text is genuinely clipped —
+   measured after layout, and re-measured when the clamp or width changes. */
+function TableCell({ value, clamp = 3 }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef(null);
+  const [overflows, setOverflows] = useState(false);
+
+  const isList = Array.isArray(value) && value.length > 0;
+  const empty = value === null || value === undefined ||
+    (Array.isArray(value) ? value.length === 0 : String(value).trim() === "");
+
+  useEffect(() => {
+    if (empty) { setOverflows(false); return; }
+
+    const measure = () => {
+      const el = ref.current;
+      if (!el) return;
+      // only meaningful while collapsed — expanded has no clamp to exceed
+      if (open) return;
+      setOverflows(el.scrollHeight - el.clientHeight > 4);
+    };
+
+    // wait for layout/fonts before measuring, or every cell looks clipped
+    const raf = requestAnimationFrame(measure);
+
+    const ro = typeof ResizeObserver !== "undefined"
+      ? new ResizeObserver(measure) : null;
+    if (ro && ref.current) ro.observe(ref.current);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      if (ro) ro.disconnect();
+    };
+  }, [value, clamp, open, empty]);
+
+  if (empty) {
+    return <span style={{ color: T.muted, fontSize: 12.5 }}>—</span>;
+  }
+
+  const showToggle = overflows || open;
+
+  return (
+    <div
+      onClick={(e) => { if (showToggle) { e.stopPropagation(); setOpen((o) => !o); } }}
+      style={{ position: "relative", cursor: showToggle ? "pointer" : "default" }}
+    >
+      <div ref={ref} style={{
+        overflow: "hidden",
+        display: open ? "block" : "-webkit-box",
+        WebkitLineClamp: open ? "unset" : clamp,
+        WebkitBoxOrient: "vertical",
+        maxHeight: open ? 420 : undefined,
+        overflowY: open ? "auto" : "hidden",
+        overflowWrap: "anywhere",
+      }}>
+        {isList ? (
+          <ul style={{ margin: 0, paddingLeft: 15 }}>
+            {value.map((item, i) => (
+              <li key={i} style={{ marginBottom: 3 }}>{String(item)}</li>
+            ))}
+          </ul>
+        ) : String(value)}
+      </div>
+
+      {!open && overflows && (
+        <div style={{
+          position: "absolute", left: 0, right: 0, bottom: 0, height: 20,
+          background: `linear-gradient(to bottom, transparent, ${T.canvas})`,
+          pointerEvents: "none",
+        }} />
+      )}
+
+      {showToggle && (
+        <div style={{
+          fontSize: 10, fontWeight: 600, color: "rgba(255,255,255,0.28)",
+          marginTop: 8, position: "relative", letterSpacing: "0.02em",
+        }}>
+          {open ? "kamroq" : "ko'proq"}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /* Compact Notion button used inline in a table row */
 function NotionExportCell({ p, onSynced }) {
@@ -1853,6 +1941,7 @@ function ResultsTab({ project, onDetailOpenChange }) {
   const [hoverId, setHoverId] = useState(null);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkMsg, setBulkMsg] = useState("");
+  const [density, setDensity] = useState(3);   // lines shown per cell
 
   const load = async () => {
     const { data } = await supabase
@@ -1951,6 +2040,28 @@ function ResultsTab({ project, onDetailOpenChange }) {
 
         <div style={{ flex: 1 }} />
 
+        {/* row height */}
+        <div style={{
+          display: "flex", alignItems: "center", gap: 7,
+          fontSize: 11, fontWeight: 700, color: T.muted,
+        }} title="Katak balandligi">
+          <Database size={12} />
+          <span style={{ whiteSpace: "nowrap" }}>Ko&apos;rinish</span>
+        </div>
+
+        <div style={{
+          display: "inline-flex", gap: 3, backgroundColor: T.canvas,
+          border: `1px solid ${T.border}`, borderRadius: 10, padding: 3,
+        }}>
+          {[{ v: 2, l: "Ixcham" }, { v: 3, l: "O'rtacha" }, { v: 8, l: "Keng" }].map((d) => (
+            <button key={d.v} className="btn" onClick={() => setDensity(d.v)} style={{
+              padding: "5px 11px", borderRadius: 7, fontSize: 11.5, fontWeight: 700,
+              backgroundColor: density === d.v ? T.panel : "transparent",
+              color: density === d.v ? T.primary : T.text2,
+            }}>{d.l}</button>
+          ))}
+        </div>
+
         <button className="btn" onClick={load} style={{
           display: "flex", alignItems: "center", gap: 6, backgroundColor: "transparent",
           border: `1px solid ${T.border}`, borderRadius: 10, padding: "6px 12px",
@@ -1961,8 +2072,24 @@ function ResultsTab({ project, onDetailOpenChange }) {
       </div>
 
       <div className="card" style={{ overflow: "hidden", width: "100%" }}>
-        <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+          <table style={{
+            width: "100%",
+            minWidth: 1100,
+            borderCollapse: "collapse",
+            tableLayout: "fixed",
+          }}>
+            <colgroup>
+              <col style={{ width: "13%", minWidth: 150 }} />
+              <col style={{ width: "10%", minWidth: 110 }} />
+              <col style={{ width: "13%", minWidth: 140 }} />
+              <col style={{ width: "13%", minWidth: 140 }} />
+              <col style={{ width: "12%", minWidth: 130 }} />
+              <col style={{ width: "11%", minWidth: 120 }} />
+              <col style={{ width: "11%", minWidth: 120 }} />
+              <col style={{ width: "13%", minWidth: 150 }} />
+              <col style={{ width: "8%", minWidth: 120 }} />
+            </colgroup>
             <thead>
               <tr style={{ borderBottom: `1px solid ${T.border}`, backgroundColor: T.s1 }}>
                 <th style={{
@@ -1988,7 +2115,7 @@ function ResultsTab({ project, onDetailOpenChange }) {
                     onMouseLeave={() => setHoverId(null)}
                     style={{
                       borderBottom: `1px solid ${T.border}`,
-                      backgroundColor: hovered ? "rgba(255,255,255,0.035)" : "transparent",
+                      backgroundColor: hovered ? "rgba(255,255,255,0.025)" : "transparent",
                       transition: "background-color 120ms ease-out",
                     }}
                   >
@@ -1998,11 +2125,13 @@ function ResultsTab({ project, onDetailOpenChange }) {
                       borderRight: `1px solid ${T.border}`,
                       transition: "background-color 120ms ease-out",
                     }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                         <button className="btn" onClick={() => openDetail(p.id)} style={{
-                          display: "flex", alignItems: "center", gap: 7, padding: "8px 14px",
+                          display: "flex", alignItems: "center", gap: 6, padding: "7px 12px",
                           borderRadius: 9, backgroundColor: T.s2, border: `1px solid ${T.border}`,
-                          color: T.text, fontSize: 13.5, fontWeight: 800, whiteSpace: "nowrap",
+                          color: T.text, fontSize: 13, fontWeight: 800,
+                          maxWidth: "100%", overflow: "hidden", textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
                         }}>
                           {prof.ism || "Nomalum"}
                         </button>
@@ -2012,36 +2141,33 @@ function ResultsTab({ project, onDetailOpenChange }) {
                             onClick={(e) => e.stopPropagation()}
                             style={{
                               display: "flex", alignItems: "center", justifyContent: "center",
-                              width: 28, height: 28, borderRadius: 8, flexShrink: 0,
+                              width: 26, height: 26, borderRadius: 8, flexShrink: 0,
                               backgroundColor: "transparent", border: `1px solid ${T.border}`,
                               color: T.text2, textDecoration: "none",
                             }}>
-                            <ArrowLeft size={12} style={{ transform: "rotate(135deg)" }} />
+                            <ArrowLeft size={11} style={{ transform: "rotate(135deg)" }} />
                           </a>
                         )}
                       </div>
                     </td>
-                    {CUSTDEV_COLUMNS.map((c, i) => {
-                      const val = pickField(prof, c.keys);
-                      return (
-                        <td key={c.label} style={{
-                          ...tdStyle,
-                          borderRight: i < CUSTDEV_COLUMNS.length - 1 ? `1px solid ${T.border}` : "none",
-                        }} title={cellText(val)}>
-                          <div style={{
-                            minWidth: 200, maxWidth: 320,
-                            display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical",
-                            overflow: "hidden",
-                            color: val ? T.text : T.muted,
-                          }}>{cellText(val)}</div>
-                        </td>
-                      );
-                    })}
-                    <td style={{ ...tdStyle, textAlign: "right", whiteSpace: "nowrap" }}>
-                      <div style={{ display: "flex", gap: 8, justifyContent: "flex-end" }}>
+
+                    {CUSTDEV_COLUMNS.map((c, i) => (
+                      <td key={c.label} style={{
+                        ...tdStyle,
+                        borderRight: i < CUSTDEV_COLUMNS.length - 1 ? `1px solid ${T.border}` : "none",
+                      }}>
+                        <TableCell value={pickField(prof, c.keys)} clamp={density} />
+                      </td>
+                    ))}
+
+                    <td style={{ ...tdStyle, textAlign: "right" }}>
+                      <div style={{
+                        display: "flex", gap: 6, justifyContent: "flex-end",
+                        flexWrap: "wrap",
+                      }}>
                         <button className="btn" onClick={() => openDetail(p.id)} style={{
-                          padding: "7px 14px", borderRadius: 9, backgroundColor: T.panel,
-                          color: T.primary, fontSize: 12, fontWeight: 800, whiteSpace: "nowrap",
+                          padding: "6px 11px", borderRadius: 9, backgroundColor: T.panel,
+                          color: T.primary, fontSize: 11.5, fontWeight: 800, whiteSpace: "nowrap",
                         }}>Batafsil</button>
                         <NotionExportCell p={p} onSynced={(id, data) => patchProfile(id, {
                           notion_page_id: data.notion_page_id,
@@ -2056,6 +2182,14 @@ function ResultsTab({ project, onDetailOpenChange }) {
             </tbody>
           </table>
         </div>
+      </div>
+
+      <div style={{
+        fontSize: 11.5, color: T.muted, fontWeight: 600, marginTop: 10,
+        display: "flex", alignItems: "center", gap: 6,
+      }}>
+        <AlertCircle size={12} />
+        Katakni bosib to&apos;liq matnni ochish mumkin
       </div>
     </div>
   );
