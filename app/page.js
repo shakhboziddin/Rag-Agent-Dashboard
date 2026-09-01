@@ -322,6 +322,64 @@ export default function App() {
   const clearFinished = () =>
     setUploads((prev) => prev.filter((u) => u.stage !== "done"));
 
+  /* After a page refresh the browser has no memory of uploads that were
+     still processing. The backend does — upload_status keeps the stage.
+     Pull anything still in flight and resume watching it. */
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+
+    (async () => {
+      const cutoff = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+      const { data } = await supabase
+        .from("upload_status")
+        .select("*")
+        .in("stage", ["uploading", "processing", "transcribing", "analyzing"])
+        .gte("updated_at", cutoff)
+        .order("updated_at", { ascending: false });
+
+      if (cancelled || !data || data.length === 0) return;
+
+      // one entry per file — keep the most recent row
+      const seen = new Set();
+      const restored = [];
+      data.forEach((r) => {
+        if (!r.file_id || seen.has(r.file_id)) return;
+        seen.add(r.file_id);
+        restored.push({
+          id: "restored_" + r.file_id,
+          fileId: r.file_id,
+          name: r.file_name || String(r.file_id).split("_").slice(1).join("_") || r.file_id,
+          clientId: r.project_id,
+          kind: /\.(mp3|m4a|ogg|wav|mp4)$/i.test(r.file_name || "") ? "audio" : "text",
+          stage: r.stage,
+          progress: r.progress ?? 100,
+          restored: true,
+        });
+      });
+
+      if (restored.length === 0) return;
+
+      setUploads((prev) => {
+        const have = new Set(prev.map((u) => u.fileId).filter(Boolean));
+        return [...restored.filter((r) => !have.has(r.fileId)), ...prev];
+      });
+
+      // keep polling each restored file until it finishes
+      restored.forEach((r) => {
+        watchStatus(r.fileId, (s) =>
+          setUploads((prev) => prev.map((u) =>
+            u.id === r.id
+              ? { ...u, stage: s.stage, errMsg: s.stage === "error" ? (s.message || "Xatolik") : null }
+              : u
+          ))
+        );
+      });
+    })();
+
+    return () => { cancelled = true; };
+  }, [user]);
+
   // Real session check — runs once on load, and on every auth change
   useEffect(() => {
     const applySession = async (session) => {
@@ -1488,7 +1546,7 @@ function UploadRow({ f, onRetry }) {
           {L.stage[f.stage]}{f.stage === "uploading" ? ` ${f.progress}%` : ""}
         </span>
 
-        {f.stage === "error" && (
+        {f.stage === "error" && !f.restored && (
           <button className="btn" onClick={onRetry} title="Qayta urinish" style={{
             width: 34, height: 34, borderRadius: 11, background: "transparent",
             border: `1px solid ${T.border}`, display: "flex", alignItems: "center",
@@ -1524,7 +1582,9 @@ function UploadRow({ f, onRetry }) {
             }} />
           </div>
           <div style={{ fontSize: 11, color: T.muted, fontWeight: 600, marginTop: 6 }}>
-            Fayl yuklandi — server hali ishlayapti. Bu bir necha daqiqa olishi mumkin.
+            {f.restored
+              ? "Sahifa yangilandi — server hali ishlayapti, kuzatilmoqda."
+              : "Fayl yuklandi — server hali ishlayapti. Bu bir necha daqiqa olishi mumkin."}
           </div>
         </div>
       )}
